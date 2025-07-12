@@ -1,9 +1,16 @@
 import requests
 from bs4 import BeautifulSoup
 import re
+import pandas as pd
+
+
+def clean(text: str) -> str:
+    """Replace all whitespace (including newlines/tabs) with single spaces, then strip."""
+    return re.sub(r'\s+', ' ', text).strip()
+
 
 # Sample match URL
-url = 'https://www.vlr.gg/498628/paper-rex-vs-fnatic-valorant-masters-toronto-2025-gf'  # Replace with actual match link
+url = 'https://www.vlr.gg/510153/fnatic-vs-paper-rex-esports-world-cup-2025-sf'  # Replace with actual match link
 headers = {'User-Agent': 'Mozilla/5.0'}
 
 resp = requests.get(url, headers=headers)
@@ -18,7 +25,7 @@ event_name = event_elem.get_text(strip=True) if event_elem else 'N/A'
 
 # === Event Stage ===
 stage_elem = soup.select_one('.match-header-event-series')
-event_stage = stage_elem.get_text(strip=True) if stage_elem else 'N/A'
+event_stage = clean(stage_elem.get_text(strip=True) if stage_elem else 'N/A')
 
 # === Match Date ===
 date_elem = soup.select_one('.match-header-date .moment-tz-convert[data-moment-format="dddd, MMMM Do"]')
@@ -311,3 +318,54 @@ if len(history_containers) >= 2:
 
 else:
     print("Could not find recent match history sections.")
+
+# === Match-level dataset ===
+match_rows = []
+for map_data in maps_data:
+    match_rows.append({
+        'match_id': match_id,
+        'event_name': event_name,
+        'event_stage': event_stage,
+        'match_date': match_date,
+        'patch': patch,
+        'team_a': team_a,
+        'team_b': team_b,
+        'team_a_score': team_a_score,
+        'team_b_score': team_b_score,
+        'map_name': map_data['name'],
+        'map_score_a': map_data['score_a'],
+        'map_score_b': map_data['score_b'],
+        'winner': team_a if int(map_data['score_a']) > int(map_data['score_b']) else team_b
+    })
+
+match_df = pd.DataFrame(match_rows)
+match_df.to_csv('matches.csv', index=False)
+
+
+# === Player-level dataset ===
+player_rows = []
+for map_data in maps_data:
+    players = map_data['players']
+    for i, player in enumerate(players):
+        team = team_a if i < 5 else team_b  # First 5 are team A, next 5 are team B
+        player_rows.append({
+            'match_id': match_id,
+            'map_name': map_data['name'],
+            'team': team,
+            'player_name': player['name'],
+            'agent': player['agents'],
+            'rating': player['rating'],
+            'acs': player['acs'],
+            'kills': player['kills'],
+            'deaths': player['deaths'],
+            'assists': player['assists'],
+            'kast': player['kast'],
+            'adr': player['adr'],
+            'hs_percent': player['hs_percent'],
+            'first_kills': player.get('first_kills', 'N/A'),
+            'first_deaths': player.get('first_deaths', 'N/A'),
+            'fk_fd_diff': player.get('fk_fd_diff', 'N/A'),
+        })
+
+player_df = pd.DataFrame(player_rows)
+player_df.to_csv('players.csv', index=False)
