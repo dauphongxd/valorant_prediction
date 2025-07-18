@@ -8,7 +8,7 @@ from sklearn.pipeline import Pipeline
 import joblib
 
 # --- Configuration ---
-HALF_LIFE_DAYS = 180
+HALF_LIFE_DAYS = 90
 MODEL_PATH = 'model.pkl'
 DATA_PATH = 'ready.csv'
 

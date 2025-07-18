@@ -1,5 +1,3 @@
-# predict.py (Updated with simplified 'Best Of' input)
-
 import pandas as pd
 import numpy as np
 import joblib
