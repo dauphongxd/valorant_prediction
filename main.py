@@ -1,34 +1,6 @@
 import sys
 import os
 from importlib import import_module
-from tab_transformer_pytorch import TabTransformer
-import torch
-import torch.nn as nn
-import numpy as np
-
-
-class TabTransformerWrapper:
-    def __init__(self, **kwargs):
-        self.patience = kwargs.pop('patience', 20)
-        self.max_epochs = kwargs.pop('max_epochs', 150)
-        self.batch_size = kwargs.pop('batch_size', 1024)
-        self.lr = kwargs.pop('lr', 2e-2)
-        self.verbose = kwargs.pop('verbose', True)
-        self.device = kwargs.pop('device_name', 'cuda' if torch.cuda.is_available() else 'cpu')
-        self.num_continuous = kwargs.get('num_continuous', 0)
-        self.model = TabTransformer(**kwargs).to(self.device)
-        self.best_val_loss = float('inf')
-        self.patience_counter = 0
-    def fit(self, X_train, y_train, eval_set=None):
-        pass
-    def predict_proba(self, X_pred):
-        self.model.eval()
-        X_pred_cont = torch.tensor(X_pred[:, :self.num_continuous], dtype=torch.float).to(self.device)
-        X_pred_cat = torch.tensor(X_pred[:, self.num_continuous:], dtype=torch.long).to(self.device)
-        with torch.no_grad():
-            preds = self.model(X_pred_cat, X_pred_cont)
-            probs = torch.sigmoid(preds).cpu().numpy()
-        return np.hstack([1 - probs, probs])
 
 # --- CONFIGURATION: Define all models and their properties ---
 # This is now simpler. We just define the path and the new, unified entry point function.

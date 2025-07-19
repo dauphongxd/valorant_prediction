@@ -13,3 +13,4 @@ requests
 bs4
 discord.py
 python-dotenv
+tabulate
