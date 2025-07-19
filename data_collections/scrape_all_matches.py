@@ -92,7 +92,7 @@ def scrape_match(url: str):
 
 if __name__ == "__main__":
     # 1) Load URLs
-    with open("vct24_match_urls.json", "r") as f:
+    with open("vct25_match_urls.json", "r") as f:
         urls = json.load(f)
 
     # 2) See which matches we've already scraped

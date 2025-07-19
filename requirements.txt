@@ -1,8 +1,15 @@
 pandas
+numpy
 scikit-learn
 lightgbm
 joblib
 xgboost
 pytorch-tabnet
+tab-transformer-pytorch
 optuna
 torch
+catboost
+requests
+bs4
+discord.py
+python-dotenv
