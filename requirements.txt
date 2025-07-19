@@ -4,3 +4,5 @@ lightgbm
 joblib
 xgboost
 pytorch-tabnet
+optuna
+torch
