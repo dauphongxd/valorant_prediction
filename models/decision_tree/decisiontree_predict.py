@@ -1,114 +1,99 @@
 import pandas as pd
-import numpy as np
 import joblib
-import datetime
+import warnings
 import os
 
-
-def load_model_data(path):
-    """Loads the dictionary containing the pipeline and all helper data."""
-    try:
-        model_data = joblib.load(path)
-        return model_data
-    except FileNotFoundError:
-        print(f"Error: Model file not found at '{path}'")
-        print("Please run catboost_training.py first to create the model file.")
-        return None
+warnings.filterwarnings('ignore')
 
 
-def build_prediction_input(team_a, team_b, map_name, best_of, model_data):
-    """
-    Constructs the feature DataFrame for a new prediction.
-    This function's interface does not change.
-    """
-    map_stats = model_data['map_stats']
-    global_stats = model_data['global_stats']
-    all_teams = model_data['all_teams']
+# --- STANDARD PREDICTION LOGIC (FROM YOUR BEST SCRIPTS) ---
 
-    if team_a not in all_teams or team_b not in all_teams:
-        raise ValueError("One or both teams were not found in the training data.")
+def _get_single_prediction(team_a, team_b, map_name, best_of, MODEL, TEAM_STATS, MODEL_COLUMNS):
+    """Internal helper to get a single, one-sided prediction from the model."""
+    default_stats = {'ewm_acs': 0, 'ewm_kdr': 0, 'ewm_assists': 0}
+    stats_a = TEAM_STATS.get(team_a, default_stats)
+    stats_b = TEAM_STATS.get(team_b, default_stats)
 
-    stats_source_df = None
-    is_fallback = False
-    if not map_name or map_name not in map_stats:
-        is_fallback = True
-        stats_source_df = global_stats
-    else:
-        stats_source_df = map_stats[map_name]
-        if team_a not in stats_source_df.index or team_b not in stats_source_df.index:
-            is_fallback = True
-            stats_source_df = global_stats
-
-    stat_diff = {
-        f'{stat}_diff': stats_source_df.at[team_a, stat] - stats_source_df.at[team_b, stat]
-        for stat in ['acs', 'kills', 'deaths', 'assists']
+    feature_dict = {
+        'feature_ewm_acs_diff': stats_a['ewm_acs'] - stats_b['ewm_acs'],
+        'feature_ewm_kdr_diff': stats_a['ewm_kdr'] - stats_b['ewm_kdr'],
+        'feature_ewm_assists_diff': stats_a['ewm_assists'] - stats_b['ewm_assists']
     }
-    team_diff = {
-        f'team_{t}': (1 if t == team_a else -1 if t == team_b else 0)
-        for t in all_teams
-    }
-    context_features = {'best_of': best_of, 'recency_score': 1.0}
-    features = {**stat_diff, **team_diff, **context_features}
-    X_new = pd.DataFrame([features])
+    input_df = pd.DataFrame(0, index=[0], columns=MODEL_COLUMNS)
+    for key, value in feature_dict.items():
+        if key in input_df.columns:
+            input_df.loc[0, key] = value
+    map_col = f'map_{map_name}'
+    if map_col in input_df.columns:
+        input_df.loc[0, map_col] = 1.0
+    bo_col = f'bo_{best_of}'
+    if bo_col in input_df.columns:
+        input_df.loc[0, bo_col] = 1.0
 
-    return X_new, is_fallback
+    return MODEL.predict_proba(input_df)[0][1]
 
 
 def get_prediction(team_a, team_b, map_name, best_of, artifacts_dir='.'):
-    """
-    NEW UNIFIED ENTRY POINT
-    """
-    model_path = os.path.join(artifacts_dir, 'model.pkl')
-    model_data = load_model_data(model_path)
-    if not model_data:
-        return None
-
+    """UNIFIED ENTRY POINT - Predicts win probability using Symmetrical Normalization."""
     try:
-        # Predict P(A beats B)
-        X_a_vs_b, is_fallback1 = build_prediction_input(
-            team_a, team_b, map_name, best_of, model_data
-        )
-        pipeline = model_data['pipeline']
-        prob_a_wins_raw = pipeline.predict_proba(X_a_vs_b)[0, 1]
-
-        # Predict P(B beats A)
-        X_b_vs_a, is_fallback2 = build_prediction_input(
-            team_b, team_a, map_name, best_of, model_data
-        )
-        prob_b_wins_raw = pipeline.predict_proba(X_b_vs_a)[0, 1]
-
-        # Normalize for symmetry
-        total_prob = prob_a_wins_raw + prob_b_wins_raw
-        prob_a_wins_final = 0.5 if total_prob == 0 else prob_a_wins_raw / total_prob
-        return prob_a_wins_final
-
-    except (ValueError, KeyError) as e:
-        print(f"\nError making prediction: {e}")
+        model = joblib.load(os.path.join(artifacts_dir, 'model.pkl'))
+        team_stats = joblib.load(os.path.join(artifacts_dir, 'team_stats.pkl'))
+        model_columns = joblib.load(os.path.join(artifacts_dir, 'model_columns.pkl'))
+    except FileNotFoundError:
+        print("Error: Model artifacts not found. Please run the training script first.")
         return None
+
+    prob_a_raw = _get_single_prediction(team_a, team_b, map_name, best_of, model, team_stats, model_columns)
+    prob_b_raw = _get_single_prediction(team_b, team_a, map_name, best_of, model, team_stats, model_columns)
+    total_prob = prob_a_raw + prob_b_raw
+
+    if total_prob == 0: return 0.5
+    return prob_a_raw / total_prob
+
+
+def main():
+    """Main function to run the prediction CLI."""
+    print("\n--- Upgraded Decision Tree Match Predictor ---")
+    print("Enter 'exit' at any prompt to quit.")
+
+    # Pre-load stats just to check for new teams later
+    try:
+        team_stats = joblib.load(os.path.join('.', 'team_stats.pkl'))
+    except FileNotFoundError:
+        print("Warning: team_stats.pkl not found. Cannot check for new teams.")
+        team_stats = {}
+
+    while True:
+        team_a = input("\nEnter name for Team A: ").strip()
+        if team_a.lower() == 'exit': break
+        team_b = input("Enter name for Team B: ").strip()
+        if team_b.lower() == 'exit': break
+        map_name = input("Enter Map Name (e.g., Ascent): ").strip()
+        if map_name.lower() == 'exit': break
+        best_of_num = input("Enter Best Of (1, 3, or 5): ").strip()
+        if best_of_num.lower() == 'exit': break
+
+        if best_of_num in ['1', '3', '5']:
+            best_of = f"Bo{best_of_num}"
+        else:
+            print(f"[!] Invalid format '{best_of_num}'. Defaulting to Bo3.")
+            best_of = 'Bo3'
+
+        print("\nCalculating...")
+        prob_a_wins = get_prediction(team_a, team_b, map_name, best_of, artifacts_dir='.')
+
+        if prob_a_wins is not None:
+            prob_b_wins = 1 - prob_a_wins
+            print("\n--- Prediction Results ---")
+            print(f"Matchup: {team_a} vs. {team_b} on '{map_name or 'N/A'}' ({best_of})")
+            print(f"  > {team_a} Win Probability: {prob_a_wins:.2%}")
+            print(f"  > {team_b} Win Probability: {prob_b_wins:.2%}")
+            if team_a not in team_stats: print(f"  (Note: '{team_a}' is a new team with no historical data.)")
+            if team_b not in team_stats: print(f"  (Note: '{team_b}' is a new team with no historical data.)")
+            print("-" * 30)
+        else:
+            print("Prediction failed.")
 
 
 if __name__ == '__main__':
-    print("\n--- Esports Match Predictor ---")
-    team_a_input = input("Enter Team A: ").strip()
-    team_b_input = input("Enter Team B: ").strip()
-    map_name_input = input("Enter Map Name (or leave blank for general): ").strip()
-
-    best_of_input_str = input("Best of (1, 3, or 5): ").strip()
-    best_of_map = {'1': 'Bo1', '3': 'Bo3', '5': 'Bo5'}
-    best_of_final = best_of_map.get(best_of_input_str)
-
-    if not best_of_final:
-        print(f"[!] Invalid format '{best_of_input_str}'. Defaulting to Bo3.")
-        best_of_final = 'Bo3'
-
-    prob_a_wins_final = get_prediction(team_a_input, team_b_input, map_name_input or 'N/A', best_of_final,
-                                       artifacts_dir='.')
-
-    if prob_a_wins_final is not None:
-        winner = team_a_input if prob_a_wins_final > 0.5 else team_b_input
-        print("\n--- Prediction ---")
-        print(f"P({team_a_input} wins) = {prob_a_wins_final:.3f}")
-        print(f"P({team_b_input} wins) = {1 - prob_a_wins_final:.3f}")
-        print(f"Predicted Winner: {winner}")
-    else:
-        print("Prediction failed.")
+    main()

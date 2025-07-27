@@ -1,8 +1,88 @@
-# main.py (Updated to remove map_name)
+# main.py (Updated to enforce valid team names)
 
 import sys
 import os
 from importlib import import_module
+from typing import Optional
+
+# --- CONFIGURATION: Team Name Mapping ---
+# Maps full team names to their common abbreviations. The system will prioritize the full name.
+TEAM_NAME_MAPPING = {
+    "100 Thieves": "100T",
+    "2Game Esports": "2G",
+    "All Gamers": "AG",
+    "Apeks": "APEKS",
+    "Attacking Soul Esports": "ASE",
+    "BBL Esports": "BBL",
+    "BLEED": "BLD",
+    "BOOM Esports": "BOOM",
+    "Bilibili Gaming": "BLG",
+    "Cloud9": "C9",
+    "DRX": "DRX",
+    "DetonatioN FocusMe": "DFM",
+    "Douyu Gaming": "DYG",
+    "Dragon Ranger Gaming": "DRG",
+    "EDward Gaming": "EDG",
+    "Evil Geniuses": "EG",
+    "FNATIC": "FNC",
+    "FURIA": "FUR",
+    "FUT Esports": "FUT",
+    "Four Angry Men": "4AM",
+    "FunPlus Phoenix": "FPX",
+    "G2 Esports": "G2",
+    "GIANTX": "GX",
+    "Gank Gaming": "GNK",
+    "Gen.G": "GENG",
+    "Gentle Mates": "M8",
+    "Giants Gaming": "GIA",
+    "Global Esports": "GE",
+    "Guangzhou Huadu Bilibili Gaming(Bilibili Gaming)": "BLG",
+    "Invincible Gaming": "IG",
+    "JD Mall JDG Esports(JDG Esports)": "JDG",
+    "JDG Esports": "JDG",
+    "KOI": "KOI",
+    "KRU Esports": "KRU",
+    "Karmine Corp": "KC",
+    "Kingzone": "KZ",
+    "LEVIATAN": "LEV",
+    "LOUD": "LOUD",
+    "MIBR": "MIBR",
+    "Monarch Effect": "ME",
+    "Movistar KOI(KOI)": "KOI",
+    "NRG": "NRG",
+    "Natus Vincere": "NAVI",
+    "Night Wings Gaming": "NWG",
+    "Nongshim RedForce": "NS",
+    "Nova Esports": "NOVA",
+    "Number One Player": "NOP",
+    "Paper Rex": "PRX",
+    "Rare Atom": "RA",
+    "Rex Regum Qeon": "RRQ",
+    "Royal Never Give Up": "RNG",
+    "Sentinels": "SEN",
+    "Shenzhen NTER": "NTER",
+    "T1": "T1",
+    "TALON": "TLN",
+    "TYLOO": "TYL",
+    "Team Bunny": "TBNY",
+    "Team Heretics": "TH",
+    "Team Liquid": "TL",
+    "Team Secret": "TS",
+    "Team SuperBusS": "TSB",
+    "Team Vitality": "VIT",
+    "Titan Esports Club": "TEC",
+    "Totoro Gaming": "TRG",
+    "Trace Esports": "TE",
+    "VISA KRU(KRU Esports)": "KRU",
+    "Weibo Gaming": "WBG",
+    "Wolves Esports": "WLG",
+    "Xi Lai Gaming": "XLG",
+    "ZETA DIVISION": "ZETA",
+}
+
+# Create a reverse mapping for efficient lookups (abbreviation -> full name)
+# All keys are converted to lowercase for case-insensitive matching
+REVERSE_TEAM_MAPPING = {v.lower(): k for k, v in TEAM_NAME_MAPPING.items()}
 
 # --- CONFIGURATION: Define all models and their properties ---
 MODELS_CONFIG = {
@@ -65,6 +145,24 @@ MODELS_CONFIG = {
 }
 
 
+# --- UPDATED: Team Name Normalization Function ---
+def normalize_team_name(name: str) -> Optional[str]:
+    """
+    Converts a team abbreviation or alternate name to its official, full name.
+    Returns None if no mapping is found, indicating an invalid team.
+    """
+    cleaned_name = name.strip().lower()
+    # Check if the input is an abbreviation (e.g., 'c9')
+    if cleaned_name in REVERSE_TEAM_MAPPING:
+        return REVERSE_TEAM_MAPPING[cleaned_name]
+    # Check if the input is already a full name (but maybe with wrong casing)
+    for full_name, abbr in TEAM_NAME_MAPPING.items():
+        if full_name.lower() == cleaned_name:
+            return full_name
+    # If no mapping found, return None
+    return None
+
+
 # --- MAIN PIPELINE LOGIC ---
 
 def run_all_models(team_a, team_b, best_of):
@@ -73,7 +171,7 @@ def run_all_models(team_a, team_b, best_of):
     Map name is no longer a parameter here.
     """
     all_predictions = []
-    map_name = 'N/A' # Hardcode map_name since it's no longer a user input
+    map_name = 'N/A'  # Hardcode map_name since it's no longer a user input
 
     for model_name, config in MODELS_CONFIG.items():
         print(f"\n--- Running {model_name} ---")
@@ -94,7 +192,7 @@ def run_all_models(team_a, team_b, best_of):
             prob_a_wins = predict_func(
                 team_a=team_a,
                 team_b=team_b,
-                map_name=map_name, # Pass the hardcoded 'N/A' value
+                map_name=map_name,  # Pass the hardcoded 'N/A' value
                 best_of=best_of,
                 artifacts_dir=model_dir
             )
@@ -126,11 +224,25 @@ def main():
 
     while True:
         print("\n--- New Prediction ---")
-        team_a = input("Enter name for Team A: ").strip()
-        if team_a.lower() == 'exit': break
+        team_a_input = input("Enter name for Team A: ").strip()
+        if team_a_input.lower() == 'exit': break
 
-        team_b = input("Enter name for Team B: ").strip()
-        if team_b.lower() == 'exit': break
+        team_b_input = input("Enter name for Team B: ").strip()
+        if team_b_input.lower() == 'exit': break
+
+        # --- Normalize and Validate Team Names ---
+        team_a = normalize_team_name(team_a_input)
+        team_b = normalize_team_name(team_b_input)
+
+        if team_a is None:
+            print(f"\n[Error] Invalid team name: '{team_a_input}'. No data has been trained on this team.")
+            continue  # Restart the loop
+
+        if team_b is None:
+            print(f"\n[Error] Invalid team name: '{team_b_input}'. No data has been trained on this team.")
+            continue  # Restart the loop
+
+        print(f" > Normalized names: '{team_a_input}' -> '{team_a}', '{team_b_input}' -> '{team_b}'")
 
         while True:
             best_of_num = input("Enter Best Of (1, 3, or 5): ").strip()
@@ -140,7 +252,7 @@ def main():
             else:
                 print("Invalid input. Please enter 1, 3, or 5.")
 
-        # Run the entire pipeline without map_name
+        # Run the entire pipeline with normalized names
         results = run_all_models(team_a, team_b, best_of)
 
         # --- Aggregate and Display Final Results ---
