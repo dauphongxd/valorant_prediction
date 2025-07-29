@@ -1,149 +1,124 @@
-"""
-Valorant Betting Data Tool - VLR.gg Scraper Version (Final, Robust)
+# bet.py (Refactored to be a reusable and robust module)
 
-Handles special characters and partial team names.
-"""
-import requests
-from bs4 import BeautifulSoup
-import argparse
 import logging
-import unicodedata  # Import the library for handling special characters
+import unicodedata
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException
+from bs4 import BeautifulSoup
+import argparse
+import requests  # Moved import to top
 
 # --- Setup Logging ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logging.getLogger('selenium').setLevel(logging.WARNING)
 
-# ==============================================================================
-# HELPER FUNCTION FOR NORMALIZING NAMES
-# ==============================================================================
 
 def normalize_name(name):
-    """
-    Converts a name to lowercase and removes diacritics (special characters).
-    e.g., 'LEVIATÁN' -> 'leviatan'
-    """
-    # NFD form separates base characters from their accents
+    """Converts a name to lowercase and removes diacritics."""
     nfkd_form = unicodedata.normalize('NFD', name)
-    # Filter out non-spacing marks (the accents)
     ascii_name = ''.join([c for c in nfkd_form if not unicodedata.combining(c)])
     return ascii_name.lower()
 
-# ==============================================================================
-# VLR.GG SCRAPING FUNCTIONS
-# ==============================================================================
 
 def get_vlr_odds(team1_name, team2_name):
     """
-    Uses Selenium to load the page, then scrapes VLR.gg for match odds.
+    Scrapes VLR.gg for match odds and returns the data as a dictionary.
+    This version is robust against missing image/alt tags.
     """
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'}
-
-    logging.info("Starting browser to load JavaScript content from VLR.gg...")
     service = Service(executable_path='./chromedriver.exe')
     options = webdriver.ChromeOptions()
     options.add_argument('--headless')
     options.add_argument('--log-level=3')
-    options.add_argument(f'user-agent={headers["User-Agent"]}')
+    options.add_argument(
+        'user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36')
 
     driver = None
-    page_source = None
     try:
         driver = webdriver.Chrome(service=service, options=options)
-        matches_url = "https://www.vlr.gg/matches"
-        driver.get(matches_url)
+        driver.get("https://www.vlr.gg/matches")
         WebDriverWait(driver, 15).until(EC.presence_of_element_located((By.CSS_SELECTOR, "a.match-item")))
-        logging.info("JavaScript content loaded successfully.")
         page_source = driver.page_source
     except Exception as e:
-        print(f"\n❌ An error occurred with Selenium: {e}")
-        return
+        logging.error(f"Selenium failed to load VLR matches page: {e}")
+        return {'error': 'selenium_error', 'message': str(e)}
     finally:
         if driver:
             driver.quit()
-            logging.info("Browser closed.")
 
     soup = BeautifulSoup(page_source, 'html.parser')
-
-    # --- Part 2: Parse HTML with improved matching logic ---
     all_match_cards = soup.select('a.match-item')
-    target_href = None
 
-    # Normalize the user's input once
     norm_user_team1 = normalize_name(team1_name)
     norm_user_team2 = normalize_name(team2_name)
+    found_match_info = None
 
     for link in all_match_cards:
         team_divs = link.find_all('div', class_='match-item-vs-team-name')
         if len(team_divs) >= 2:
-            scraped_team1 = team_divs[0].text.strip()
-            scraped_team2 = team_divs[1].text.strip()
-
-            # Normalize the scraped names for comparison
-            norm_scraped_team1 = normalize_name(scraped_team1)
-            norm_scraped_team2 = normalize_name(scraped_team2)
-
-            # *** NEW ROBUST MATCHING LOGIC ***
-            # Check if user input is contained within the scraped names, in either order.
-            match1 = norm_user_team1 in norm_scraped_team1 and norm_user_team2 in norm_scraped_team2
-            match2 = norm_user_team1 in norm_scraped_team2 and norm_user_team2 in norm_scraped_team1
-
-            if match1 or match2:
-                target_href = link['href']
+            scraped_team1_full = team_divs[0].text.strip()
+            scraped_team2_full = team_divs[1].text.strip()
+            if (norm_user_team1 in normalize_name(scraped_team1_full) and norm_user_team2 in normalize_name(
+                    scraped_team2_full)) or \
+                    (norm_user_team1 in normalize_name(scraped_team2_full) and norm_user_team2 in normalize_name(
+                        scraped_team1_full)):
+                found_match_info = {'href': "https://www.vlr.gg" + link['href'], 'team1_vlr': scraped_team1_full,
+                                    'team2_vlr': scraped_team2_full}
                 break
 
-    if not target_href:
-        print(f"\n❌ Could not find an upcoming match between '{team1_name}' and '{team2_name}'.")
-        print("   Please double-check the spelling as it appears on VLR.gg.")
-        return
+    if not found_match_info:
+        return {'error': 'match_not_found'}
 
-    match_page_url = "https://www.vlr.gg" + target_href
-    logging.info(f"Match URL found! Scraping odds from: {match_page_url}")
-
-    # --- Part 3: Scrape the odds (no changes needed here) ---
     try:
-        response = requests.get(match_page_url, headers=headers, timeout=15)
+        response = requests.get(found_match_info['href'], headers={'User-Agent': 'Mozilla/5.0'}, timeout=15)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
         betting_cards = soup.find_all('a', class_='match-bet-item')
 
         if not betting_cards:
-            print(f"\n🟡 Match page found, but no betting odds are listed on VLR.gg for this match yet.")
-            return
+            return {'error': 'no_odds_listed', **found_match_info}
 
-        print(f"\n--- ✅ Odds Found for {scraped_team1} vs {scraped_team2} ---") # Use original scraped names for display
+        odds_data = []
         for card in betting_cards:
             try:
-                img_src = card.find('img')['src']
-                bookmaker = img_src.split('/')[-1].split('.')[0].replace('-', ' ').capitalize()
                 teams = [team.text.strip() for team in card.find_all('span', class_='match-bet-item-team')]
-                odds = [odd.text.strip() for odd in card.find_all('span', class_='match-bet-item-odds')]
+                odds = [float(odd.text.strip()) for odd in card.find_all('span', class_='match-bet-item-odds')]
+
+                # --- THIS IS THE FIX ---
+                # Safely get the bookmaker name without causing a crash
+                img_tag = card.find('img')
+                bookmaker_name = img_tag.get('alt', 'Unknown Bookmaker') if img_tag else 'Unknown Bookmaker'
+                # -----------------------
 
                 if len(teams) == 2 and len(odds) == 2:
-                    print(f"\nBookmaker: {bookmaker}")
-                    print(f"  - {teams[0]}: {odds[0]}")
-                    print(f"  - {teams[1]}: {odds[1]}")
-            except (AttributeError, IndexError, TypeError) as e:
+                    if normalize_name(teams[0]) in normalize_name(found_match_info['team1_vlr']):
+                        odds_data.append({'bookmaker': bookmaker_name, 'team1_odds': odds[0], 'team2_odds': odds[1]})
+                    else:
+                        odds_data.append({'bookmaker': bookmaker_name, 'team1_odds': odds[1], 'team2_odds': odds[0]})
+            # Added KeyError to the list of caught exceptions for safety
+            except (AttributeError, IndexError, TypeError, ValueError, KeyError) as e:
                 logging.warning(f"Skipping a malformed betting card. Error: {e}")
                 continue
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Failed to load the specific match page: {e}")
 
-# ==============================================================================
-# MAIN EXECUTION & COMMAND-LINE INTERFACE
-# ==============================================================================
+        if not odds_data:
+            return {'error': 'no_odds_listed', **found_match_info}
 
+        return {'status': 'success', 'team1_vlr': found_match_info['team1_vlr'],
+                'team2_vlr': found_match_info['team2_vlr'], 'odds': odds_data}
+
+    # The exception will now print the actual error from requests or parsing
+    except Exception as e:
+        logging.error(f"Failed to scrape specific match page: {e}", exc_info=True)  # exc_info gives more detail
+        return {'error': 'page_scrape_failed', **found_match_info}
+
+
+# This part allows the script to still be run from the command line for testing
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Valorant Betting Data Tool - VLR.gg Scraper (Final, Robust Version).")
-    parser.add_argument('command', choices=['get-odds'])
-    parser.add_argument('team1', type=str, help='The first team name (can be partial/simplified).')
-    parser.add_argument('team2', type=str, help='The second team name (can be partial/simplified).')
+    parser = argparse.ArgumentParser(description="Valorant Betting Data Tool - VLR.gg Scraper")
+    parser.add_argument('team1', type=str, help='The first team name.')
+    parser.add_argument('team2', type=str, help='The second team name.')
     args = parser.parse_args()
-
-    if args.command == 'get-odds':
-        get_vlr_odds(args.team1, args.team2)
+    results = get_vlr_odds(args.team1, args.team2)
+    print(results)
