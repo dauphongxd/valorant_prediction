@@ -5,6 +5,8 @@ import os
 from importlib import import_module
 from typing import Optional
 
+MODEL_VERSION = "1.0"
+
 # --- CONFIGURATION: Team Name Mapping ---
 # Maps full team names to their common abbreviations. The system will prioritize the full name.
 TEAM_NAME_MAPPING = {
@@ -90,56 +92,56 @@ MODELS_CONFIG = {
         'path': 'models/catboost',
         'module_name': 'catboost_predict',
         'entry_function': 'get_prediction',
-        'display_name': 'Advanced Predictor A',
+        'display_name': 'Robin',
         'tier': '⭐⭐'
     },
     'LightGBM': {
         'path': 'models/light_gbm',
         'module_name': 'lightgbm_predict',
         'entry_function': 'get_prediction',
-        'display_name': 'Advanced Predictor B',
+        'display_name': 'Elaina',
         'tier': '⭐⭐'
     },
     'XGBoost': {
         'path': 'models/xgboost',
         'module_name': 'xg_boost_predict',
         'entry_function': 'get_prediction',
-        'display_name': 'Advanced Predictor C',
+        'display_name': 'Homura',
         'tier': '⭐⭐'
     },
     'Random Forest': {
         'path': 'models/random_forest',
         'module_name': 'random_forest_predict',
         'entry_function': 'get_prediction',
-        'display_name': 'Standard Analyst A',
+        'display_name': 'Makoto',
         'tier': '⭐'
     },
     'Decision Tree': {
         'path': 'models/decision_tree',
         'module_name': 'decisiontree_predict',
         'entry_function': 'get_prediction',
-        'display_name': 'Standard Analyst B',
+        'display_name': 'Akko',
         'tier': '⭐'
     },
     'Logistic Regression': {
         'path': 'models/logistic_regression',
         'module_name': 'logistic_regression_predict',
         'entry_function': 'get_prediction',
-        'display_name': 'Standard Analyst C',
+        'display_name': 'Kiki',
         'tier': '⭐'
     },
     'TabNet': {
         'path': 'models/tabnet',
         'module_name': 'tabnet_predict',
         'entry_function': 'get_prediction',
-        'display_name': 'Deep Learning Oracle A',
+        'display_name': 'Echidna',
         'tier': '⭐⭐⭐'
     },
     'TabTransformer': {
         'path': 'models/tab_transformer',
         'module_name': 'tab_transformer_predict',
         'entry_function': 'get_prediction',
-        'display_name': 'Deep Learning Oracle B',
+        'display_name': 'Irene',
         'tier': '⭐⭐⭐'
     }
 }

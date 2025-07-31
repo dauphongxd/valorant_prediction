@@ -1,5 +1,3 @@
-# bet.py (Refactored to be a reusable and robust module)
-
 import logging
 import unicodedata
 from selenium import webdriver
@@ -8,30 +6,22 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from bs4 import BeautifulSoup
-import argparse
-import requests  # Moved import to top
-
-# --- Setup Logging ---
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logging.getLogger('selenium').setLevel(logging.WARNING)
+import requests
 
 
 def normalize_name(name):
-    """Converts a name to lowercase and removes diacritics."""
+    """Converts a name to lowercase and removes diacritics for matching."""
     nfkd_form = unicodedata.normalize('NFD', name)
-    ascii_name = ''.join([c for c in nfkd_form if not unicodedata.combining(c)])
-    return ascii_name.lower()
+    return "".join([c for c in nfkd_form if not unicodedata.combining(c)]).lower()
 
 
-def get_vlr_odds(team1_name, team2_name):
-    """
-    Scrapes VLR.gg for match odds and returns the data as a dictionary.
-    This version is robust against missing image/alt tags.
-    """
+def scrape_upcoming_matches_list():
+    """Scrapes the main vlr.gg/matches page to get a list of all upcoming matches."""
     service = Service(executable_path='./chromedriver.exe')
     options = webdriver.ChromeOptions()
     options.add_argument('--headless')
     options.add_argument('--log-level=3')
+    options.add_argument('--disable-gpu')
     options.add_argument(
         'user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36')
 
@@ -43,82 +33,151 @@ def get_vlr_odds(team1_name, team2_name):
         page_source = driver.page_source
     except Exception as e:
         logging.error(f"Selenium failed to load VLR matches page: {e}")
-        return {'error': 'selenium_error', 'message': str(e)}
+        return None
     finally:
         if driver:
             driver.quit()
 
     soup = BeautifulSoup(page_source, 'html.parser')
     all_match_cards = soup.select('a.match-item')
-
-    norm_user_team1 = normalize_name(team1_name)
-    norm_user_team2 = normalize_name(team2_name)
-    found_match_info = None
+    scraped_matches = []
 
     for link in all_match_cards:
-        team_divs = link.find_all('div', class_='match-item-vs-team-name')
-        if len(team_divs) >= 2:
-            scraped_team1_full = team_divs[0].text.strip()
-            scraped_team2_full = team_divs[1].text.strip()
-            if (norm_user_team1 in normalize_name(scraped_team1_full) and norm_user_team2 in normalize_name(
-                    scraped_team2_full)) or \
-                    (norm_user_team1 in normalize_name(scraped_team2_full) and norm_user_team2 in normalize_name(
-                        scraped_team1_full)):
-                found_match_info = {'href': "https://www.vlr.gg" + link['href'], 'team1_vlr': scraped_team1_full,
-                                    'team2_vlr': scraped_team2_full}
-                break
+        if len(link.find_all('div', class_='match-item-vs-team-name')) < 2:
+            continue
+        team1 = link.find_all('div', class_='match-item-vs-team-name')[0].text.strip()
+        team2 = link.find_all('div', class_='match-item-vs-team-name')[1].text.strip()
+        match_time = link.find('div', class_='match-item-time').text.strip()
+        status = link.find('div', class_='ml-status').text.strip()
+        url = "https://www.vlr.gg" + link['href']
+        scraped_matches.append({
+            'team1_name': team1,
+            'team2_name': team2,
+            'match_time': match_time,
+            'status': status,
+            'vlr_url': url
+        })
+    return scraped_matches
 
-    if not found_match_info:
-        return {'error': 'match_not_found'}
 
+def scrape_results_page():
+    """Scrapes the main vlr.gg/matches page to get a list of all upcoming matches."""
+    service = Service(executable_path='./chromedriver.exe')
+    options = webdriver.ChromeOptions()
+    options.add_argument('--headless')
+    options.add_argument('--log-level=3')
+    options.add_argument('--disable-gpu')
+    options.add_argument(
+        'user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36')
+
+    driver = None
     try:
-        response = requests.get(found_match_info['href'], headers={'User-Agent': 'Mozilla/5.0'}, timeout=15)
+        driver = webdriver.Chrome(service=service, options=options)
+        # --- NEW URL ---
+        driver.get("https://www.vlr.gg/matches/results")
+        # ---------------
+        WebDriverWait(driver, 15).until(EC.presence_of_element_located((By.CSS_SELECTOR, "a.match-item")))
+        page_source = driver.page_source
+    except Exception as e:
+        logging.error(f"Selenium failed to load VLR results page: {e}")
+        return None
+    finally:
+        if driver:
+            driver.quit()
+
+    soup = BeautifulSoup(page_source, 'html.parser')
+    all_match_cards = soup.select('a.match-item')
+    completed_match_urls = []
+
+    for link in all_match_cards:
+        # We only need the URL from this page
+        if 'href' in link.attrs:
+            completed_match_urls.append("https://www.vlr.gg" + link['href'])
+
+    return completed_match_urls
+
+
+def scrape_match_page_odds(match_url: str):
+    """
+    Scrapes odds using a simple, robust positional method. It assumes the
+    left-side odds on a card belong to the left-side team in the header.
+    This eliminates all fragile name-matching logic.
+    """
+    try:
+        response = requests.get(match_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=15)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
+
         betting_cards = soup.find_all('a', class_='match-bet-item')
-
         if not betting_cards:
-            return {'error': 'no_odds_listed', **found_match_info}
+            return []
 
-        odds_data = []
+        all_odds_data = []
         for card in betting_cards:
             try:
-                teams = [team.text.strip() for team in card.find_all('span', class_='match-bet-item-team')]
-                odds = [float(odd.text.strip()) for odd in card.find_all('span', class_='match-bet-item-odds')]
+                # --- THIS IS THE NEW, SIMPLIFIED LOGIC ---
+                odds_elements = card.select('.match-bet-item-odds')
+                if len(odds_elements) != 2:
+                    continue
 
-                # --- THIS IS THE FIX ---
-                # Safely get the bookmaker name without causing a crash
-                img_tag = card.find('img')
-                bookmaker_name = img_tag.get('alt', 'Unknown Bookmaker') if img_tag else 'Unknown Bookmaker'
-                # -----------------------
+                # Trust the visual order: odds[0] is for team1, odds[1] is for team2.
+                team1_odds = float(odds_elements[0].text.strip())
+                team2_odds = float(odds_elements[1].text.strip())
 
-                if len(teams) == 2 and len(odds) == 2:
-                    if normalize_name(teams[0]) in normalize_name(found_match_info['team1_vlr']):
-                        odds_data.append({'bookmaker': bookmaker_name, 'team1_odds': odds[0], 'team2_odds': odds[1]})
-                    else:
-                        odds_data.append({'bookmaker': bookmaker_name, 'team1_odds': odds[1], 'team2_odds': odds[0]})
-            # Added KeyError to the list of caught exceptions for safety
-            except (AttributeError, IndexError, TypeError, ValueError, KeyError) as e:
-                logging.warning(f"Skipping a malformed betting card. Error: {e}")
+                img_tag = card.select_one('img')
+                bookmaker = img_tag.get('alt', 'Unknown Bookmaker') if img_tag else 'Unknown Bookmaker'
+
+                all_odds_data.append({
+                    'bookmaker': bookmaker,
+                    'team1_odds': team1_odds,
+                    'team2_odds': team2_odds
+                })
+                # ---------------------------------------------
+            except Exception as e:
+                logging.warning(f"Skipping a card on {match_url} due to parsing error: {e}")
                 continue
 
-        if not odds_data:
-            return {'error': 'no_odds_listed', **found_match_info}
+        return all_odds_data
 
-        return {'status': 'success', 'team1_vlr': found_match_info['team1_vlr'],
-                'team2_vlr': found_match_info['team2_vlr'], 'odds': odds_data}
-
-    # The exception will now print the actual error from requests or parsing
     except Exception as e:
-        logging.error(f"Failed to scrape specific match page: {e}", exc_info=True)  # exc_info gives more detail
-        return {'error': 'page_scrape_failed', **found_match_info}
+        logging.error(f"Failed to scrape specific match page {match_url}: {e}")
+        return None
 
 
-# This part allows the script to still be run from the command line for testing
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Valorant Betting Data Tool - VLR.gg Scraper")
-    parser.add_argument('team1', type=str, help='The first team name.')
-    parser.add_argument('team2', type=str, help='The second team name.')
-    args = parser.parse_args()
-    results = get_vlr_odds(args.team1, args.team2)
-    print(results)
+def scrape_match_winner(match_url: str):
+    """
+    Scrapes a completed match page on VLR.gg to find the winning team.
+    This version is resilient and uses two methods to find the winner.
+    """
+    try:
+        response = requests.get(match_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=15)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, 'html.parser')
+
+        # Method 1: The most reliable way (if it exists)
+        winner_element = soup.select_one('div.match-header-vs-team.mod-win .wf-title-med')
+        if winner_element:
+            winner_name = winner_element.text.strip()
+            return winner_name
+
+        # Method 2: Fallback for pages that don't use 'mod-win'
+        team_name_elements = soup.select('div.match-header-link-name .wf-title-med')
+        score_elements = soup.select(
+            'div.match-header-vs-score .js-spoiler span.match-header-vs-score-winner, div.match-header-vs-score .js-spoiler span.match-header-vs-score-loser')
+
+        if len(team_name_elements) < 2 or len(score_elements) < 2:
+            return None
+
+        team1_name = team_name_elements[0].text.strip()
+        team2_name = team_name_elements[1].text.strip()
+
+        score1_classes = score_elements[0].get('class', [])
+
+        if 'match-header-vs-score-winner' in score1_classes:
+            return team1_name
+        else:  # If the first team isn't the winner, the second must be.
+            return team2_name
+
+    except Exception as e:
+        logging.error(f"An unexpected error occurred while scraping winner from {match_url}: {e}")
+        return None

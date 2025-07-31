@@ -1,0 +1,73 @@
+{
+  "help_command": {
+    "title": "🤖 Valorant Predictor & Betting Bot Help",
+    "description": "Use ML to predict outcomes or bet on matches with live odds.",
+    "resolution_field_title": "Automated Bet Resolution",
+    "resolution_field_value": "Matches are automatically resolved and paid out shortly after they finish. You will receive a DM with the result.",
+    "predict_field_title": "`/predict [team_a] [team_b] [best_of]`",
+    "predict_field_value": "Predict a match winner using 8 different ML models.",
+    "bet_field_title": "`/bet [team_a] [team_b]`",
+    "bet_field_value": "Place a bet on an upcoming match.\nUses live odds scraped from VLR.gg.\nYou start with **$1000**.",
+    "balance_field_title": "`/balance`",
+    "balance_field_value": "Check your current wallet balance and see your active bets."
+  },
+  "predict_command": {
+    "invalid_team_error": "❌ Invalid team name provided for prediction. Please use a valid name or abbreviation found in `main.py`.",
+    "prediction_failed_title": "Prediction Failed",
+    "prediction_failed_desc": "None of the models could generate a prediction.",
+    "embed_title": "📈 Valorant Match Prediction",
+    "embed_description": "## ⚔️ **{user_team_a}** vs **{user_team_b}**",
+    "overall_prediction_title": "🏆 Overall Prediction (Weighted Avg)",
+    "overall_prediction_value": "**Predicted Winner: `{winner}`**\nConfidence: `{winner_prob:.2%}`",
+    "model_header_model": "Model",
+    "model_header_winner": "Winner",
+    "model_header_confidence": "Confidence",
+    "tier_standard_title": "⭐ Standard",
+    "tier_advanced_title": "⭐⭐ Advanced",
+    "tier_deep_learning_title": "⭐⭐⭐ Deep Learning",
+    "model_failed": "Failed",
+    "model_na": "N/A",
+    "embed_footer": "Aggregated from {successful_models_count}/{len_results} successful models."
+  },
+  "balance_command": {
+    "embed_title": "💰 {display_name}'s Wallet",
+    "balance_field_title": "Current Balance",
+    "active_bets_field_title": "Active Bets",
+    "no_active_bets": "You have no active bets."
+  },
+  "bet_command": {
+    "no_match_found_error": "❌ Could not find an upcoming match between '{team_a}' and '{team_b}' in my cache.",
+    "no_odds_found_error": "🟡 Match found for **{team1_name} vs {team2_name}**, but no betting odds are listed yet.",
+    "slip_title": "Betting Slip: {vlr_team1} vs {vlr_team2}",
+    "slip_description": "Click a team below to place your bet. This slip will expire in 3 minutes.",
+    "odds_field_title": "{team_name} Odds",
+    "slip_footer": "Odds from {bookmaker} (via local cache)."
+  },
+  "betting_modal": {
+    "modal_title": "Place Your Bet",
+    "amount_label": "Amount to bet on {team_bet_on}",
+    "amount_placeholder": "e.g., 100 or 55.50",
+    "invalid_amount_error": "❌ Please enter a valid positive number.",
+    "insufficient_funds_error": "❌ **Insufficient Funds!** Your balance is only **${balance:.2f}**.",
+    "bet_confirmed_title": "✅ Bet Confirmed!",
+    "bet_confirmed_desc": "You placed a bet on the **{team_bet_on}** vs **{opponent}** match.",
+    "your_pick_field": "Your Pick",
+    "bet_amount_field": "Bet Amount",
+    "payout_field": "Potential Payout",
+    "new_balance_footer": "Your new balance is ${new_balance:.2f}. Good luck!",
+    "generic_error": "❌ An error occurred while placing your bet. Please try again."
+  },
+  "betting_view": {
+    "expired_footer": "This betting slip has expired."
+  },
+  "bet_resolution_dm": {
+    "win_title": "🎉 Bet Won!",
+    "win_desc": "Your bet on **{team}** was successful!",
+    "win_payout_field": "Payout",
+    "win_payout_value": "**${payout:.2f}** has been added to your balance.",
+    "loss_title": "💔 Bet Lost",
+    "loss_desc": "Unfortunately, your bet on **{team}** did not win.",
+    "loss_amount_field": "Amount Lost",
+    "loss_amount_value": "**${amount:.2f}**"
+  }
+}
