@@ -139,6 +139,14 @@ def scrape_match_page_odds(match_url: str):
 
         return all_odds_data
 
+    except requests.exceptions.HTTPError as e:
+        if e.response.status_code == 404:
+            logging.warning(f"Match page not found (404) for {match_url}. It may have been canceled.")
+            return "404_NOT_FOUND"  # Return our special signal
+        else:
+            logging.error(f"HTTP error when scraping {match_url}: {e}")
+            return None  # Return None for other HTTP errors (e.g., 503)
+
     except Exception as e:
         logging.error(f"Failed to scrape specific match page {match_url}: {e}")
         return None

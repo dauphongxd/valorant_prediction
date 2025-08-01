@@ -5,6 +5,7 @@ import logging
 import json
 import os
 from datetime import datetime
+import numpy as np
 
 DATABASE_FILE = 'valorant_bot.db'
 
@@ -15,11 +16,24 @@ def initialize_database():
 
     # --- CORRECTED: Full table definitions ---
     cursor.execute('''
-    CREATE TABLE IF NOT EXISTS users (
-        user_id TEXT PRIMARY KEY,
-        username TEXT NOT NULL,
-        balance REAL NOT NULL DEFAULT 1000.0,
-        prediction_count INTEGER NOT NULL DEFAULT 0
+                   CREATE TABLE IF NOT EXISTS users
+                   (
+                       user_id
+                       TEXT
+                       PRIMARY
+                       KEY,
+                       username
+                       TEXT
+                       NOT
+                       NULL,
+                       balance
+                       REAL
+                       NOT
+                       NULL
+                       DEFAULT
+                       1000.0,
+                       prediction_count INTEGER NOT NULL DEFAULT 0,
+                                         language TEXT NOT NULL DEFAULT 'en' -- ADD THIS LINE
     )''')
     cursor.execute('''
     CREATE TABLE IF NOT EXISTS bets (
@@ -272,6 +286,23 @@ def get_matches_to_check_for_odds():
     conn.close()
     return urls
 
+def remove_match_by_url(vlr_url: str):
+    """
+    Removes a match and its associated odds from the database, typically used for stale/404'd matches.
+    """
+    conn = sqlite3.connect(DATABASE_FILE)
+    cursor = conn.cursor()
+    try:
+        # The ON DELETE CASCADE in your schema will automatically delete associated odds.
+        cursor.execute("DELETE FROM matches WHERE vlr_url = ?", (vlr_url,))
+        conn.commit()
+        logging.info(f"Removed stale match from database: {vlr_url}")
+    except Exception as e:
+        conn.rollback()
+        logging.error(f"Failed to remove match {vlr_url}: {e}")
+    finally:
+        conn.close()
+
 def get_matches_to_resolve():
     """Finds all matches in the DB that are marked as 'Final'."""
     conn = sqlite3.connect(DATABASE_FILE)
@@ -338,6 +369,15 @@ def resolve_match_bets(match_url: str, winner_name: str):
 
     return resolved_bets_info
 
+class NumpyFloatJSONEncoder(json.JSONEncoder):
+    """
+    A custom JSON encoder that converts numpy float32 objects to standard Python floats.
+    """
+    def default(self, obj):
+        if isinstance(obj, np.float32):
+            return float(obj)
+        return json.JSONEncoder.default(self, obj)
+
 
 def save_prediction(team_a: str, team_b: str, best_of: str, model_version: str, winner: str, winner_prob: float,
                     successful_models: int, total_models: int, results: list):
@@ -345,7 +385,8 @@ def save_prediction(team_a: str, team_b: str, best_of: str, model_version: str, 
     conn = sqlite3.connect(DATABASE_FILE)
     cursor = conn.cursor()
     # Convert the detailed results list to a JSON string for storage
-    results_json = json.dumps(results)
+    # Use the custom encoder class to handle special numpy types
+    results_json = json.dumps(results, cls=NumpyFloatJSONEncoder)
     try:
         cursor.execute('''
                        INSERT INTO predictions (team_a, team_b, best_of, model_version, winner, winner_prob,
@@ -400,3 +441,47 @@ def get_cached_prediction(team_a: str, team_b: str, best_of: str, model_version:
             return swapped_prediction
 
     return None
+
+
+def set_user_language(user_id: str, language: str):
+    """
+    Updates the language preference for a specific user in the database.
+    """
+    conn = sqlite3.connect(DATABASE_FILE)
+    cursor = conn.cursor()
+    try:
+        cursor.execute("UPDATE users SET language = ? WHERE user_id = ?", (language, user_id))
+        conn.commit()
+        logging.info(f"Set language to '{language}' for user {user_id}")
+    except Exception as e:
+        conn.rollback()
+        logging.error(f"Failed to set language for user {user_id}: {e}")
+    finally:
+        conn.close()
+
+
+def reset_user_account(user_id: str):
+    """
+    Resets a user's balance to the default amount and clears all their active bets.
+    """
+    conn = sqlite3.connect(DATABASE_FILE)
+    cursor = conn.cursor()
+    try:
+        # Begin a transaction to ensure both operations succeed or fail together
+        cursor.execute("BEGIN TRANSACTION")
+
+        # Set balance back to 1000
+        cursor.execute("UPDATE users SET balance = 1000.0 WHERE user_id = ?", (user_id,))
+
+        # Delete all bets with the status 'ACTIVE' for that user
+        cursor.execute("DELETE FROM bets WHERE user_id = ? AND status = 'ACTIVE'", (user_id,))
+
+        # Commit the transaction
+        conn.commit()
+        logging.info(f"Successfully reset account for user {user_id}")
+    except Exception as e:
+        conn.rollback()
+        logging.error(f"Failed to reset account for user {user_id}: {e}")
+        raise  # Re-raise the exception to be handled by the bot command
+    finally:
+        conn.close()

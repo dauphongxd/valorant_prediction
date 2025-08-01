@@ -8,6 +8,7 @@ import asyncio
 import logging
 from typing import List
 import json
+from localization import translator
 
 # --- Custom Module Imports ---
 from bet import (
@@ -53,85 +54,106 @@ tree = app_commands.CommandTree(client)
 
 
 # --- UI Classes for Interactive Betting ---
-class BettingModal(ui.Modal, title='Place Your Bet'):
-    """The pop-up form where users enter their bet amount."""
-
-    def __init__(self, team_bet_on: str, opponent: str, odds: float, match_id: str):
-        super().__init__()
+class BettingModal(ui.Modal):  # <-- Remove the static title from here
+    # <-- Add user_locale to the constructor
+    def __init__(self, team_bet_on: str, opponent: str, odds: float, match_id: str, user_locale: str):
+        # <-- Set the title dynamically using the translator
+        super().__init__(title=translator.get_string("betting_modal.modal_title", user_locale))
         self.team_bet_on = team_bet_on
         self.opponent = opponent
         self.odds = odds
         self.match_id = match_id
-        self.amount_input = ui.TextInput(label=f"Amount to bet on {self.team_bet_on}", placeholder="e.g., 100 or 55.50",
-                                         required=True)
+        # <-- Translate the input field's label and placeholder
+        self.amount_input = ui.TextInput(
+            label=translator.get_string("betting_modal.amount_label", user_locale, team_bet_on=self.team_bet_on),
+            placeholder=translator.get_string("betting_modal.amount_placeholder", user_locale),
+            required=True
+        )
         self.add_item(self.amount_input)
 
     async def on_submit(self, interaction: discord.Interaction):
+        # 1. Get the user's full account from the database
+        account = await get_user_account(str(interaction.user.id), str(interaction.user))
+
+        # 2. Get their saved language, defaulting to 'en' if something goes wrong
+        user_locale = account['language'] if account else 'en'
         try:
             amount = float(self.amount_input.value)
             if amount <= 0: raise ValueError("Amount must be positive.")
         except ValueError:
-            await interaction.response.send_message("❌ Please enter a valid positive number.", ephemeral=True)
+            # <-- Translate error message
+            await interaction.response.send_message(
+                translator.get_string("betting_modal.invalid_amount_error", user_locale), ephemeral=True)
             return
 
-        # Get the user's account from the DATABASE
         account = await get_user_account(str(interaction.user.id), str(interaction.user))
 
         if amount > account['balance']:
+            # <-- Translate error message
             await interaction.response.send_message(
-                f"❌ **Insufficient Funds!** Your balance is only **${account['balance']:.2f}**.", ephemeral=True)
+                translator.get_string("betting_modal.insufficient_funds_error", user_locale,
+                                      balance=account['balance']),
+                ephemeral=True)
             return
 
-        # NEW: Place the bet using the database function
         try:
             loop = asyncio.get_running_loop()
             await loop.run_in_executor(
                 None,
                 database.place_bet,
-                str(interaction.user.id),
-                self.match_id,
-                self.team_bet_on,
-                self.opponent,
-                amount,
-                self.odds
+                str(interaction.user.id), self.match_id, self.team_bet_on,
+                self.opponent, amount, self.odds
             )
 
             new_balance = account['balance'] - amount
             payout = amount * self.odds
-            embed = discord.Embed(title="✅ Bet Confirmed!", color=discord.Color.green(),
-                                  description=f"You placed a bet on the **{self.team_bet_on}** vs **{self.opponent}** match.")
-            embed.add_field(name="Your Pick", value=f"**{self.team_bet_on}**").add_field(name="Bet Amount",
-                                                                                         value=f"**${amount:.2f}**").add_field(
-                name="Potential Payout", value=f"**${payout:.2f}**")
-            embed.set_footer(text=f"Your new balance is ${new_balance:.2f}. Good luck!")
+
+            # <-- Translate the entire confirmation embed
+            embed = discord.Embed(
+                title=translator.get_string("betting_modal.bet_confirmed_title", user_locale),
+                color=discord.Color.green(),
+                description=translator.get_string("betting_modal.bet_confirmed_desc", user_locale,
+                                                  team_bet_on=self.team_bet_on, opponent=self.opponent)
+            )
+            embed.add_field(name=translator.get_string("betting_modal.your_pick_field", user_locale),
+                            value=f"**{self.team_bet_on}**")
+            embed.add_field(name=translator.get_string("betting_modal.bet_amount_field", user_locale),
+                            value=f"**${amount:.2f}**")
+            embed.add_field(name=translator.get_string("betting_modal.payout_field", user_locale),
+                            value=f"**${payout:.2f}**")
+            embed.set_footer(
+                text=translator.get_string("betting_modal.new_balance_footer", user_locale, new_balance=new_balance))
             await interaction.response.send_message(embed=embed, ephemeral=True)
 
         except Exception as e:
             logging.error(f"Error during bet submission for {interaction.user}: {e}")
-            await interaction.response.send_message("❌ An error occurred while placing your bet. Please try again.",
+            # <-- Translate generic error
+            await interaction.response.send_message(translator.get_string("betting_modal.generic_error", user_locale),
                                                     ephemeral=True)
 
 
 class BettingView(ui.View):
-    """The view containing the buttons for team selection."""
-    # --- FIX: Now accepts the vlr_url to use as a unique ID ---
-    def __init__(self, *, team1_vlr, team2_vlr, odds_t1, odds_t2, vlr_url, timeout=180):
+    # <-- Add user_locale to the constructor
+    def __init__(self, *, team1_vlr, team2_vlr, odds_t1, odds_t2, vlr_url, user_locale, timeout=180):
         super().__init__(timeout=timeout)
         self.team1_vlr, self.team2_vlr = team1_vlr, team2_vlr
         self.odds_t1, self.odds_t2 = odds_t1, odds_t2
-        self.match_id = vlr_url # Use the URL as the unique ID
-        # -------------------------------------------------------------
+        self.match_id = vlr_url
+        self.user_locale = user_locale  # <-- Store the language
         self.message = None
         self.add_item(ui.Button(label=self.team1_vlr, style=discord.ButtonStyle.primary, custom_id="team1_button"))
         self.add_item(ui.Button(label=self.team2_vlr, style=discord.ButtonStyle.secondary, custom_id="team2_button"))
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        # This part doesn't need to change, it passes the self.match_id (now the URL) to the modal.
         modal = None
+        # <-- Pass the stored language to the BettingModal
         if interaction.data["custom_id"] == "team1_button":
-            modal = BettingModal(team_bet_on=self.team1_vlr, opponent=self.team2_vlr, odds=self.odds_t1, match_id=self.match_id)
+            modal = BettingModal(team_bet_on=self.team1_vlr, opponent=self.team2_vlr, odds=self.odds_t1,
+                                 match_id=self.match_id, user_locale=self.user_locale)
         elif interaction.data["custom_id"] == "team2_button":
-            modal = BettingModal(team_bet_on=self.team2_vlr, opponent=self.team1_vlr, odds=self.odds_t2, match_id=self.match_id)
+            modal = BettingModal(team_bet_on=self.team2_vlr, opponent=self.team1_vlr, odds=self.odds_t2,
+                                 match_id=self.match_id, user_locale=self.user_locale)
+
         if modal:
             await interaction.response.send_modal(modal)
             return True
@@ -140,9 +162,34 @@ class BettingView(ui.View):
     async def on_timeout(self):
         if self.message:
             expired_embed = self.message.embeds[0]
-            expired_embed.set_footer(text="This betting slip has expired.").color = discord.Color.greyple()
+            # <-- Translate the timeout footer
+            expired_embed.set_footer(text=translator.get_string("betting_view.expired_footer", self.user_locale))
+            expired_embed.color = discord.Color.greyple()
             for item in self.children: item.disabled = True
             await self.message.edit(embed=expired_embed, view=self)
+
+
+class ResetConfirmationView(ui.View):
+    def __init__(self, *, user_locale: str, timeout=30):
+        super().__init__(timeout=timeout)
+        self.value = None  # This will store whether the user confirmed or cancelled
+
+        # Add the confirmation and cancel buttons using translated labels
+        confirm_label = translator.get_string("reset_command.confirm_button_label", user_locale)
+        cancel_label = translator.get_string("reset_command.cancel_button_label", user_locale)
+
+        self.add_item(ui.Button(label=confirm_label, style=discord.ButtonStyle.danger, custom_id="confirm_reset"))
+        self.add_item(ui.Button(label=cancel_label, style=discord.ButtonStyle.secondary, custom_id="cancel_reset"))
+
+    @ui.button(custom_id="confirm_reset")
+    async def confirm_button_callback(self, interaction: discord.Interaction, button: ui.Button):
+        self.value = True
+        self.stop()  # Stop the view from listening to more interactions
+
+    @ui.button(custom_id="cancel_reset")
+    async def cancel_button_callback(self, interaction: discord.Interaction, button: ui.Button):
+        self.value = False
+        self.stop()
 
 
 @tasks.loop(minutes=10)
@@ -173,8 +220,16 @@ async def update_matches_cache():
     logging.info(f"[CACHE TASK] Found {len(matches_for_odds_check)} 'Upcoming' matches to check for odds.")
     for url in matches_for_odds_check:
         odds_data = await loop.run_in_executor(None, scrape_match_page_odds, url)
-        if odds_data is not None:
+
+        # --- NEW LOGIC TO HANDLE 404 ---
+        if odds_data == "404_NOT_FOUND":
+            # The match page doesn't exist, so remove it from our database.
+            await loop.run_in_executor(None, database.remove_match_by_url, url)
+        elif odds_data is not None and isinstance(odds_data, list):
+            # If we got a list of odds (and not None), update them.
             await loop.run_in_executor(None, database.update_match_odds, url, odds_data)
+        # If odds_data is None (due to a temporary error), we do nothing and will simply try again on the next 10-minute cycle.
+
         await asyncio.sleep(2)  # Be polite
 
     # --- Part 4: Resolve bets for matches we know are FINAL ---
@@ -197,16 +252,37 @@ async def update_matches_cache():
                 # The DM notification logic is correct and remains here
                 for bet_info in resolved_bets:
                     try:
+                        # First, get the user's full account data from the DB
+                        account = await loop.run_in_executor(None, database.get_user_account, bet_info['user_id'],
+                                                             "Unknown")
+                        # Get their language, defaulting to 'en' if something goes wrong
+                        user_locale = account['language'] if account else 'en'
+
                         user = await client.fetch_user(int(bet_info['user_id']))
                         if bet_info['outcome'] == 'win':
-                            embed = discord.Embed(title="🎉 Bet Won!", color=discord.Color.gold(),
-                                                  description=f"Your bet on **{bet_info['team']}** was successful!")
-                            embed.add_field(name="Payout",
-                                            value=f"**${bet_info['payout']:.2f}** has been added to your balance.")
-                        else:
-                            embed = discord.Embed(title="💔 Bet Lost", color=discord.Color.red(),
-                                                  description=f"Unfortunately, your bet on **{bet_info['team']}** did not win.")
-                            embed.add_field(name="Amount Lost", value=f"**${bet_info['amount']:.2f}**")
+                            embed = discord.Embed(
+                                title=translator.get_string("bet_resolution_dm.win_title", user_locale),
+                                color=discord.Color.gold(),
+                                description=translator.get_string("bet_resolution_dm.win_desc", user_locale,
+                                                                  team=bet_info['team'])
+                            )
+                            embed.add_field(
+                                name=translator.get_string("bet_resolution_dm.win_payout_field", user_locale),
+                                value=translator.get_string("bet_resolution_dm.win_payout_value", user_locale,
+                                                            payout=bet_info['payout'])
+                            )
+                        else:  # Loss
+                            embed = discord.Embed(
+                                title=translator.get_string("bet_resolution_dm.loss_title", user_locale),
+                                color=discord.Color.red(),
+                                description=translator.get_string("bet_resolution_dm.loss_desc", user_locale,
+                                                                  team=bet_info['team'])
+                            )
+                            embed.add_field(
+                                name=translator.get_string("bet_resolution_dm.loss_amount_field", user_locale),
+                                value=translator.get_string("bet_resolution_dm.loss_amount_value", user_locale,
+                                                            amount=bet_info['amount'])
+                            )
                         await user.send(embed=embed)
                     except Exception as e:
                         logging.warning(f"Failed to send bet resolution DM to {bet_info['user_id']}: {e}")
@@ -242,25 +318,46 @@ async def on_ready():
 # --- HELP COMMAND (No changes needed) ---
 @tree.command(name="help", description="Shows how to use the bot.")
 async def help_command(interaction: discord.Interaction):
+    # Defer the response first
+    await interaction.response.defer(ephemeral=True)
+
+    # 1. Get the user's full account from the database
+    account = await get_user_account(str(interaction.user.id), str(interaction.user))
+
+    # 2. Get their saved language, defaulting to 'en' if something goes wrong
+    user_locale = account['language'] if account else 'en'
+
     embed = discord.Embed(
-        title="🤖 Valorant Predictor & Betting Bot Help",
-        description="Use ML to predict outcomes or bet on matches with live odds.",
+        title=translator.get_string("help_command.title", user_locale),
+        description=translator.get_string("help_command.description", user_locale),
         color=discord.Color.purple()
     )
     embed.add_field(
-        name="Automated Bet Resolution",
-        value="Matches are automatically resolved and paid out shortly after they finish. You will receive a DM with the result.",
-        # Changed description
+        name=translator.get_string("help_command.resolution_field_title", user_locale),
+        value=translator.get_string("help_command.resolution_field_value", user_locale),
         inline=False
     )
-    embed.add_field(name="`/predict [team_a] [team_b] [best_of]`",
-                    value="Predict a match winner using 8 different ML models.", inline=False)
-    embed.add_field(name="`/bet [team_a] [team_b]`", value=(
-        "Place a bet on an upcoming match.\n" "Uses live odds scraped from VLR.gg.\n" "You start with **$1000**."),
-                    inline=False)
-    embed.add_field(name="`/balance`", value="Check your current wallet balance and see your active bets.",
-                    inline=False)
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    embed.add_field(
+        name=translator.get_string("help_command.predict_field_title", user_locale),
+        value=translator.get_string("help_command.predict_field_value", user_locale),
+        inline=False
+    )
+    embed.add_field(
+        name=translator.get_string("help_command.bet_field_title", user_locale),
+        value=translator.get_string("help_command.bet_field_value", user_locale),
+        inline=False
+    )
+    embed.add_field(
+        name=translator.get_string("help_command.balance_field_title", user_locale),
+        value=translator.get_string("help_command.balance_field_value", user_locale),
+        inline=False
+    )
+    embed.add_field(
+        name=translator.get_string("help_command.language_field_title", user_locale),
+        value=translator.get_string("help_command.language_field_value", user_locale),
+        inline=False
+    )
+    await interaction.followup.send(embed=embed)
 
 
 # --- PREDICT COMMAND ---
@@ -275,16 +372,21 @@ async def help_command(interaction: discord.Interaction):
     app_commands.Choice(name="Best of 3", value="Bo3"),
     app_commands.Choice(name="Best of 5", value="Bo5"),
 ])
-async def predict_command(interaction: discord.Interaction, team_a: str, team_b: str,
-                          best_of: app_commands.Choice[str]):
+async def predict_command(interaction: discord.Interaction, team_a: str, team_b: str, best_of: app_commands.Choice[str]):
+    # Defer the response first
     await interaction.response.defer(thinking=True)
+
+    # 1. Get the user's full account from the database
+    account = await get_user_account(str(interaction.user.id), str(interaction.user))
+
+    # 2. Get their saved language, defaulting to 'en' if something goes wrong
+    user_locale = account['language'] if account else 'en'
 
     user_team_a = normalize_model_team_name(team_a)
     user_team_b = normalize_model_team_name(team_b)
 
     if not user_team_a or not user_team_b:
-        await interaction.followup.send(
-            "❌ Invalid team name provided for prediction. Please use a valid name or abbreviation found in `main.py`.")
+        await interaction.followup.send(translator.get_string("predict_command.invalid_team_error", user_locale))
         return
 
     # NEW: Get user account and update prediction count in the database
@@ -303,21 +405,40 @@ async def predict_command(interaction: discord.Interaction, team_a: str, team_b:
 
     if cached_prediction:
         logging.info(f"Cache hit for {user_team_a} vs {user_team_b}. Serving from database.")
-        # Re-create the embed from cached data
         winner = cached_prediction['winner']
         winner_prob = cached_prediction['winner_prob']
 
-        embed = discord.Embed(title="📈 Valorant Match Prediction (Cached)",
-                              description=f"## ⚔️ **{user_team_a}** vs **{user_team_b}**", color=discord.Color.blue())
-        embed.add_field(name="🏆 Overall Prediction (Weighted Avg)",
-                        value=f"**Predicted Winner: `{winner}`**\nConfidence: `{winner_prob:.2%}`", inline=False)
+        # --- APPLY TRANSLATION HERE ---
+        embed = discord.Embed(
+            # Append "(Cached)" or a translated equivalent to the title
+            title=translator.get_string("predict_command.embed_title", user_locale),
+            description=translator.get_string("predict_command.embed_description", user_locale, user_team_a=user_team_a,
+                                              user_team_b=user_team_b),
+            color=discord.Color.blue()
+        )
+        embed.add_field(
+            name=translator.get_string("predict_command.overall_prediction_title", user_locale),
+            value=translator.get_string("predict_command.overall_prediction_value", user_locale, winner=winner,
+                                        winner_prob=winner_prob),
+            inline=False
+        )
 
-        # Unpack the detailed results from JSON
         results = json.loads(cached_prediction['results_json'])
-        headers = ["Model", "Winner", "Confidence"]
-        for tier, title in {'⭐': "⭐ Standard", '⭐⭐': "⭐⭐ Advanced", '⭐⭐⭐': "⭐⭐⭐ Deep Learning"}.items():
-            # ... (the logic to build the table from 'results' is identical to the non-cached path)
-            # This can be refactored into a helper function to avoid code duplication
+
+        # Translate headers and tier titles, just like in the other part of the command
+        headers = [
+            translator.get_string("predict_command.model_header_model", user_locale),
+            translator.get_string("predict_command.model_header_winner", user_locale),
+            translator.get_string("predict_command.model_header_confidence", user_locale)
+        ]
+        tier_titles = {
+            '⭐': translator.get_string("predict_command.tier_standard_title", user_locale),
+            '⭐⭐': translator.get_string("predict_command.tier_advanced_title", user_locale),
+            '⭐⭐⭐': translator.get_string("predict_command.tier_deep_learning_title", user_locale)
+        }
+
+        # Now rebuild the tables using the translated headers and tier titles
+        for tier, title in tier_titles.items():
             tier_data = []
             for res in results:
                 if res['tier'] == tier:
@@ -326,7 +447,11 @@ async def predict_command(interaction: discord.Interaction, team_a: str, team_b:
                         model_conf = f"{res['prob_a_wins'] if res['prob_a_wins'] >= 0.5 else 1 - res['prob_a_wins']:.2%}"
                         tier_data.append([res['model'], model_winner, model_conf])
                     else:
-                        tier_data.append([res['model'], "Failed", "N/A"])
+                        tier_data.append([
+                            res['model'],
+                            translator.get_string("predict_command.model_failed", user_locale),
+                            translator.get_string("predict_command.model_na", user_locale)
+                        ])
             if tier_data:
                 table_string = tabulate(tier_data, headers=headers, tablefmt="github")
                 embed.add_field(name=title, value=f"```\n{table_string}\n```", inline=False)
@@ -337,7 +462,6 @@ async def predict_command(interaction: discord.Interaction, team_a: str, team_b:
         return  # End execution here
 
     logging.info(f"Cache miss for {user_team_a} vs {user_team_b}. Running models.")
-    results = run_all_models(user_team_a, user_team_b, best_of.value)
 
     # --- The rest of the prediction logic is unchanged for now ---
     results = run_all_models(user_team_a, user_team_b, best_of.value)
@@ -352,9 +476,12 @@ async def predict_command(interaction: discord.Interaction, team_a: str, team_b:
             successful_models_count += 1
 
     if total_weight == 0:
-        await interaction.followup.send(embed=discord.Embed(title="Prediction Failed",
-                                                            description="None of the models could generate a prediction.",
-                                                            color=discord.Color.red()))
+        embed = discord.Embed(
+            title=translator.get_string("predict_command.prediction_failed_title", user_locale),
+            description=translator.get_string("predict_command.prediction_failed_desc", user_locale),
+            color=discord.Color.red()
+        )
+        await interaction.followup.send(embed=embed)
         return
 
     avg_prob = total_weighted_prob / total_weight
@@ -375,13 +502,31 @@ async def predict_command(interaction: discord.Interaction, team_a: str, team_b:
         results  # Pass the detailed results for JSON storage
     )
 
-    embed = discord.Embed(title="📈 Valorant Match Prediction",
-                          description=f"## ⚔️ **{user_team_a}** vs **{user_team_b}**", color=discord.Color.blue())
-    embed.add_field(name="🏆 Overall Prediction (Weighted Avg)",
-                    value=f"**Predicted Winner: `{winner}`**\nConfidence: `{winner_prob:.2%}`", inline=False)
+    embed = discord.Embed(
+        title=translator.get_string("predict_command.embed_title", user_locale),
+        description=translator.get_string("predict_command.embed_description", user_locale, user_team_a=user_team_a,
+                                          user_team_b=user_team_b),
+        color=discord.Color.blue()
+    )
+    embed.add_field(
+        name=translator.get_string("predict_command.overall_prediction_title", user_locale),
+        value=translator.get_string("predict_command.overall_prediction_value", user_locale, winner=winner,
+                                    winner_prob=winner_prob),
+        inline=False
+    )
 
-    headers = ["Model", "Winner", "Confidence"]
-    for tier, title in {'⭐': "⭐ Standard", '⭐⭐': "⭐⭐ Advanced", '⭐⭐⭐': "⭐⭐⭐ Deep Learning"}.items():
+    headers = [
+        translator.get_string("predict_command.model_header_model", user_locale),
+        translator.get_string("predict_command.model_header_winner", user_locale),
+        translator.get_string("predict_command.model_header_confidence", user_locale)
+    ]
+    tier_titles = {
+        '⭐': translator.get_string("predict_command.tier_standard_title", user_locale),
+        '⭐⭐': translator.get_string("predict_command.tier_advanced_title", user_locale),
+        '⭐⭐⭐': translator.get_string("predict_command.tier_deep_learning_title", user_locale)
+    }
+
+    for tier, title in tier_titles.items():
         tier_data = []
         for res in results:
             if res['tier'] == tier:
@@ -390,19 +535,32 @@ async def predict_command(interaction: discord.Interaction, team_a: str, team_b:
                     model_conf = f"{res['prob_a_wins'] if res['prob_a_wins'] >= 0.5 else 1 - res['prob_a_wins']:.2%}"
                     tier_data.append([res['model'], model_winner, model_conf])
                 else:
-                    tier_data.append([res['model'], "Failed", "N/A"])
+                    tier_data.append([
+                        res['model'],
+                        translator.get_string("predict_command.model_failed", user_locale),
+                        translator.get_string("predict_command.model_na", user_locale)
+                    ])
         if tier_data:
             table_string = tabulate(tier_data, headers=headers, tablefmt="github")
             embed.add_field(name=title, value=f"```\n{table_string}\n```", inline=False)
 
-    embed.set_footer(text=f"Aggregated from {successful_models_count}/{len(results)} successful models.")
+    embed.set_footer(text=translator.get_string("predict_command.embed_footer", user_locale,
+                                                successful_models_count=successful_models_count,
+                                                len_results=len(results)))
     await interaction.followup.send(embed=embed)
 
 
 # --- BALANCE COMMAND (MODIFIED) ---
 @tree.command(name="balance", description="Check your wallet and view your active bets.")
 async def balance_command(interaction: discord.Interaction):
+    # Defer the response first
     await interaction.response.defer(ephemeral=True)
+
+    # 1. Get the user's full account from the database
+    account = await get_user_account(str(interaction.user.id), str(interaction.user))
+
+    # 2. Get their saved language, defaulting to 'en' if something goes wrong
+    user_locale = account['language'] if account else 'en'
 
     # Get user account and bets from the DATABASE
     loop = asyncio.get_running_loop()
@@ -410,8 +568,17 @@ async def balance_command(interaction: discord.Interaction):
     account = await get_user_account(user_id_str, str(interaction.user))
     active_bets = await loop.run_in_executor(None, database.get_active_bets, user_id_str)
 
-    embed = discord.Embed(title=f"💰 {interaction.user.display_name}'s Wallet", color=discord.Color.green())
-    embed.add_field(name="Current Balance", value=f"**${account['balance']:.2f}**", inline=False)
+    embed = discord.Embed(
+        title=translator.get_string("balance_command.embed_title", user_locale,
+                                    display_name=interaction.user.display_name),
+        color=discord.Color.green()
+    )
+    embed.add_field(
+        name=translator.get_string("balance_command.balance_field_title", user_locale),
+        value=f"**${account['balance']:.2f}**",
+        inline=False
+    )
+    active_bets_title = translator.get_string("balance_command.active_bets_field_title", user_locale)
 
     if active_bets:
         bet_list = []
@@ -419,9 +586,13 @@ async def balance_command(interaction: discord.Interaction):
             payout = bet['amount'] * bet['odds']
             bet_list.append(
                 f"`{i + 1}.` **${bet['amount']:.2f}** on **{bet['team_bet_on']}** vs {bet['opponent']} (Odds: {bet['odds']:.2f}) for **${payout:.2f}**")
-        embed.add_field(name="Active Bets", value="\n".join(bet_list), inline=False)
+        embed.add_field(name=active_bets_title, value="\n".join(bet_list), inline=False)
     else:
-        embed.add_field(name="Active Bets", value="You have no active bets.", inline=False)
+        embed.add_field(
+            name=active_bets_title,
+            value=translator.get_string("balance_command.no_active_bets", user_locale),
+            inline=False
+        )
 
     await interaction.followup.send(embed=embed)
 
@@ -433,50 +604,149 @@ async def balance_command(interaction: discord.Interaction):
     team_b="The name of the second team."
 )
 async def bet_command(interaction: discord.Interaction, team_a: str, team_b: str):
-    await interaction.response.defer(thinking=True)
+    # Defer the response first
+    await interaction.response.defer(ephemeral=True)
+
+    # 1. Get the user's full account from the database
+    account = await get_user_account(str(interaction.user.id), str(interaction.user))
+
+    # 2. Get their saved language, defaulting to 'en' if something goes wrong
+    user_locale = account['language'] if account else 'en'
+
     loop = asyncio.get_running_loop()
     match, odds_list = await loop.run_in_executor(None, database.get_match_for_betting, team_a, team_b)
 
     if not match:
+        # <-- Translate error message
         await interaction.followup.send(
-            f"❌ Could not find an upcoming match between '{team_a}' and '{team_b}' in my cache.", ephemeral=True)
-        return
-
-    if not odds_list:
-        await interaction.followup.send(
-            f"🟡 Match found for **{match['team1_name']} vs {match['team2_name']}**, but no betting odds are listed yet.",
+            translator.get_string("bet_command.no_match_found_error", user_locale, team_a=team_a, team_b=team_b),
             ephemeral=True)
         return
 
-    # --- FIX: No longer averaging. We take the odds from the first bookmaker in the list. ---
+    if not odds_list:
+        # <-- Translate error message
+        await interaction.followup.send(
+            translator.get_string("bet_command.no_odds_found_error", user_locale, team1_name=match['team1_name'], team2_name=match['team2_name']),
+            ephemeral=True)
+        return
+
     first_odds = odds_list[0]
     odds_t1 = first_odds['team1_odds']
     odds_t2 = first_odds['team2_odds']
     bookmaker = first_odds['bookmaker']
-    # -----------------------------------------------------------------------------------
-
     vlr_team1 = match['team1_name']
     vlr_team2 = match['team2_name']
 
+    # <-- Translate the entire embed
     embed = discord.Embed(
-        title=f"Betting Slip: {vlr_team1} vs {vlr_team2}",
-        description="Click a team below to place your bet. This slip will expire in 3 minutes.",
+        title=translator.get_string("bet_command.slip_title", user_locale, vlr_team1=vlr_team1, vlr_team2=vlr_team2),
+        description=translator.get_string("bet_command.slip_description", user_locale),
         color=discord.Color.gold()
     )
-    embed.add_field(name=f"{vlr_team1} Odds", value=f"**{odds_t1:.2f}**")
-    embed.add_field(name=f"{vlr_team2} Odds", value=f"**{odds_t2:.2f}**")
-    # Update footer to show which bookmaker's odds are being used.
-    embed.set_footer(text=f"Odds from {bookmaker} (via local cache).")
+    embed.add_field(name=translator.get_string("bet_command.odds_field_title", user_locale, team_name=vlr_team1), value=f"**{odds_t1:.2f}**")
+    embed.add_field(name=translator.get_string("bet_command.odds_field_title", user_locale, team_name=vlr_team2), value=f"**{odds_t2:.2f}**")
+    embed.set_footer(text=translator.get_string("bet_command.slip_footer", user_locale, bookmaker=bookmaker))
 
+    # <-- Pass user_locale as a new argument to the BettingView
     view = BettingView(
         team1_vlr=vlr_team1,
         team2_vlr=vlr_team2,
         odds_t1=odds_t1,
         odds_t2=odds_t2,
-        vlr_url=match['vlr_url']
+        vlr_url=match['vlr_url'],
+        user_locale=user_locale  # <-- THE IMPORTANT NEW ARGUMENT
     )
     message = await interaction.followup.send(embed=embed, view=view)
     view.message = message
+
+
+# --- LANGUAGE COMMAND ---
+@tree.command(name="language", description="Set your preferred language for bot notifications and messages.")
+@app_commands.describe(language="Choose the language you want the bot to use for you.")
+@app_commands.choices(language=[
+    app_commands.Choice(name="English", value="en"),
+    app_commands.Choice(name="Tiếng Việt", value="vi"),
+])
+async def language_command(interaction: discord.Interaction, language: app_commands.Choice[str]):
+    """Allows a user to save their language preference to the database."""
+    await interaction.response.defer(ephemeral=True)
+
+    user_id_str = str(interaction.user.id)
+    chosen_lang_code = language.value
+    chosen_lang_name = language.name
+
+    # Check if the chosen language is actually supported by our translator
+    if chosen_lang_code not in translator.locales:
+        # We get the locale from the interaction to make sure this error message itself is translated
+        user_locale = str(interaction.locale)
+        await interaction.followup.send(translator.get_string("language_command.unsupported_language", user_locale))
+        return
+
+    # Run the database update in the background thread
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(
+        None,
+        database.set_user_language,
+        user_id_str,
+        chosen_lang_code
+    )
+
+    # Respond with a success message IN THEIR NEWLY CHOSEN LANGUAGE for immediate feedback
+    success_text = translator.get_string("language_command.success_message", chosen_lang_code, lang_name=chosen_lang_name)
+    await interaction.followup.send(success_text)
+
+
+# --- RESET COMMAND ---
+@tree.command(name="reset", description="Reset your balance to $1000 and clear all active bets.")
+async def reset_command(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+
+    # Get the user's saved language for the confirmation message
+    account = await get_user_account(str(interaction.user.id), str(interaction.user))
+    user_locale = account['language'] if account else 'en'
+
+    # Create the confirmation view and embed
+    view = ResetConfirmationView(user_locale=user_locale)
+
+    embed = discord.Embed(
+        title=translator.get_string("reset_command.confirmation_title", user_locale),
+        description=translator.get_string("reset_command.confirmation_desc", user_locale),
+        color=discord.Color.orange()
+    )
+
+    # Send the confirmation message and wait for the user's response
+    await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+
+    await view.wait()  # Wait until a button is clicked or the view times out
+
+    # Disable buttons on the original message after interaction
+    for item in view.children:
+        item.disabled = True
+    await interaction.edit_original_response(view=view)
+
+    # --- Process the result ---
+    if view.value is True:
+        # User confirmed the reset
+        try:
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, database.reset_user_account, str(interaction.user.id))
+
+            # Send a success message
+            success_text = translator.get_string("reset_command.success_message", user_locale)
+            await interaction.followup.send(success_text, ephemeral=True)
+        except Exception as e:
+            # Handle potential database errors
+            logging.error(f"Error during account reset for {interaction.user.id}: {e}")
+            await interaction.followup.send("❌ An error occurred while resetting your account.", ephemeral=True)
+
+    elif view.value is False:
+        # User cancelled
+        cancel_text = translator.get_string("reset_command.cancel_message", user_locale)
+        await interaction.followup.send(cancel_text, ephemeral=True)
+
+    else:  # This happens if the view times out (view.value is None)
+        timeout_text = translator.get_string("reset_command.timeout_message", user_locale)
+        await interaction.followup.send(timeout_text, ephemeral=True)
 
 
 # --- Run the Bot ---

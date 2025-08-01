@@ -1,0 +1,88 @@
+{
+  "language_command": {
+    "unsupported_language": "❌ Ngôn ngữ này hiện không được hỗ trợ.",
+    "success_message": "✅ Ngôn ngữ của bạn đã được đặt thành {lang_name}."
+  },
+  "help_command": {
+    "title": "🤖 Trợ Giúp Bot Cá Cược & Dự Đoán Valorant",
+    "description": "Sử dụng ML để dự đoán kết quả hoặc cá cược các trận đấu với tỷ lệ cược trực tiếp.",
+    "resolution_field_title": "Tự Động Trả Cược",
+    "resolution_field_value": "Các trận đấu sẽ được tự động trả cược và thanh toán ngay sau khi kết thúc. Bạn sẽ nhận được tin nhắn riêng về kết quả.",
+    "predict_field_title": "`/predict [đội_a] [đội_b] [thể_thức]`",
+    "predict_field_value": "Dự đoán đội chiến thắng bằng 8 mô hình ML khác nhau.",
+    "bet_field_title": "`/bet [đội_a] [đội_b]`",
+    "bet_field_value": "Đặt cược cho một trận đấu sắp diễn ra.\nSử dụng tỷ lệ cược trực tiếp từ VLR.gg.\nBạn bắt đầu với **$1000**.",
+    "balance_field_title": "`/balance`",
+    "balance_field_value": "Kiểm tra số dư ví và xem các cược đang hoạt động của bạn.",
+    "langue_field_title" : "/language",
+    "language_field_value" : "Đặt ngôn ngữ ưu tiên của bạn cho các thông báo và tin nhắn của bot."
+  },
+  "reset_command": {
+    "confirm_button_label": "Có, đặt lại tài khoản",
+    "cancel_button_label": "Hủy bỏ",
+    "confirmation_title": "⚠️ Xác Nhận Đặt Lại Tài Khoản",
+    "confirmation_desc": "Bạn có chắc chắn muốn đặt lại tài khoản không? Số dư của bạn sẽ được đặt thành **$1000.00** và **tất cả các cược đang hoạt động của bạn sẽ bị xóa**.\n\nHành động này không thể hoàn tác.",
+    "success_message": "✅ Tài khoản của bạn đã được đặt lại thành công.",
+    "cancel_message": "ℹ️ Việc đặt lại tài khoản đã được hủy bỏ.",
+    "timeout_message": "⚠️ Xác nhận đặt lại đã hết hạn."
+  },
+  "predict_command": {
+    "invalid_team_error": "❌ Tên đội không hợp lệ để dự đoán. Vui lòng sử dụng tên hợp lệ hoặc vui lòng quay lại sau.",
+    "prediction_failed_title": "Dự Đoán Thất Bại",
+    "prediction_failed_desc": "Không có mô hình nào có thể đưa ra dự đoán.",
+    "embed_title": "📈 Dự Đoán Trận Đấu Valorant",
+    "embed_description": "## ⚔️ **{user_team_a}** vs **{user_team_b}**",
+    "overall_prediction_title": "🏆 Dự Đoán Tổng Hợp (Trung Bình Có Trọng Số)",
+    "overall_prediction_value": "**Đội Dự Đoán Thắng: `{winner}`**\nĐộ Tin Cậy: `{winner_prob:.2%}`",
+    "model_header_model": "Mô Hình",
+    "model_header_winner": "Đội Thắng",
+    "model_header_confidence": "Độ Tin Cậy",
+    "tier_standard_title": "⭐ Tiêu Chuẩn",
+    "tier_advanced_title": "⭐⭐ Nâng Cao",
+    "tier_deep_learning_title": "⭐⭐⭐ Học Sâu",
+    "model_failed": "Thất bại",
+    "model_na": "Không có",
+    "embed_footer": "Tổng hợp từ {successful_models_count}/{len_results} mô hình thành công."
+  },
+  "balance_command": {
+    "embed_title": "💰 Ví của {display_name}",
+    "balance_field_title": "Số Dư Hiện Tại",
+    "active_bets_field_title": "Các Cược Đang Hoạt Động",
+    "no_active_bets": "Bạn không có cược nào đang hoạt động."
+  },
+  "bet_command": {
+    "no_match_found_error": "❌ Không tìm thấy trận đấu sắp tới giữa '{team_a}' và '{team_b}' trong bộ nhớ đệm.",
+    "no_odds_found_error": "🟡 Đã tìm thấy trận đấu cho **{team1_name} vs {team2_name}**, nhưng chưa có tỷ lệ cược.",
+    "slip_title": "Phiếu Cược: {vlr_team1} vs {vlr_team2}",
+    "slip_description": "Nhấp vào một đội bên dưới để đặt cược. Phiếu này sẽ hết hạn sau 3 phút.",
+    "odds_field_title": "Tỷ Lệ Cược {team_name}",
+    "slip_footer": "Tỷ lệ cược từ {bookmaker} (qua bộ nhớ đệm)."
+  },
+  "betting_modal": {
+    "modal_title": "Đặt Cược Của Bạn",
+    "amount_label": "Số tiền cược cho {team_bet_on}",
+    "amount_placeholder": "ví dụ: 100 hoặc 55.50",
+    "invalid_amount_error": "❌ Vui lòng nhập một số dương hợp lệ.",
+    "insufficient_funds_error": "❌ **Không Đủ Tiền!** Số dư của bạn chỉ còn **${balance:.2f}**.",
+    "bet_confirmed_title": "✅ Đặt Cược Thành Công!",
+    "bet_confirmed_desc": "Bạn đã đặt cược cho trận đấu giữa **{team_bet_on}** và **{opponent}**.",
+    "your_pick_field": "Lựa Chọn Của Bạn",
+    "bet_amount_field": "Số Tiền Cược",
+    "payout_field": "Thanh Toán Tiềm Năng",
+    "new_balance_footer": "Số dư mới của bạn là ${new_balance:.2f}. Chúc may mắn!",
+    "generic_error": "❌ Đã xảy ra lỗi khi đặt cược. Vui lòng thử lại."
+  },
+  "betting_view": {
+    "expired_footer": "Phiếu cược này đã hết hạn."
+  },
+  "bet_resolution_dm": {
+    "win_title": "🎉 Thắng Cược!",
+    "win_desc": "Cược của bạn cho **{team}** đã thành công!",
+    "win_payout_field": "Thanh Toán",
+    "win_payout_value": "**${payout:.2f}** đã được thêm vào số dư của bạn.",
+    "loss_title": "💔 Thua Cược",
+    "loss_desc": "Rất tiếc, cược của bạn cho **{team}** đã không thắng.",
+    "loss_amount_field": "Số Tiền Mất",
+    "loss_amount_value": "**${amount:.2f}**"
+  }
+}

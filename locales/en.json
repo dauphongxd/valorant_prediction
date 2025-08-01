@@ -1,4 +1,8 @@
 {
+  "language_command": {
+    "unsupported_language": "❌ This language is not currently supported.",
+    "success_message": "✅ Your language has been set to {lang_name}."
+  },
   "help_command": {
     "title": "🤖 Valorant Predictor & Betting Bot Help",
     "description": "Use ML to predict outcomes or bet on matches with live odds.",
@@ -9,7 +13,18 @@
     "bet_field_title": "`/bet [team_a] [team_b]`",
     "bet_field_value": "Place a bet on an upcoming match.\nUses live odds scraped from VLR.gg.\nYou start with **$1000**.",
     "balance_field_title": "`/balance`",
-    "balance_field_value": "Check your current wallet balance and see your active bets."
+    "balance_field_value": "Check your current wallet balance and see your active bets.",
+    "language_field_title" : "`/language`",
+    "language_field_value" : "Set your preferred language for bot notifications and messages."
+  },
+  "reset_command": {
+    "confirm_button_label": "Yes, reset my account",
+    "cancel_button_label": "Cancel",
+    "confirmation_title": "⚠️ Account Reset Confirmation",
+    "confirmation_desc": "Are you sure you want to reset your account? Your balance will be set to **$1000.00** and **all of your active bets will be deleted**.\n\nThis action cannot be undone.",
+    "success_message": "✅ Your account has been successfully reset.",
+    "cancel_message": "ℹ️ Account reset has been cancelled.",
+    "timeout_message": "⚠️ Reset confirmation has expired."
   },
   "predict_command": {
     "invalid_team_error": "❌ Invalid team name provided for prediction. Please use a valid name or abbreviation found in `main.py`.",
