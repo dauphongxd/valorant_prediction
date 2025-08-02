@@ -11,11 +11,13 @@
     "predict_field_title": "`/predict [team_a] [team_b] [best_of]`",
     "predict_field_value": "Predict a match winner using 8 different ML models.",
     "bet_field_title": "`/bet [team_a] [team_b]`",
-    "bet_field_value": "Place a bet on an upcoming match.\nUses live odds scraped from VLR.gg.\nYou start with **$1000**.",
+    "bet_field_value": "Place a bet on an upcoming match.\nUses live odds.\nYou start with **$1000**.",
     "balance_field_title": "`/balance`",
     "balance_field_value": "Check your current wallet balance and see your active bets.",
     "language_field_title" : "`/language`",
-    "language_field_value" : "Set your preferred language for bot notifications and messages."
+    "language_field_value" : "Set your preferred language for bot notifications and messages.",
+    "reset_field_title": "`/reset`",
+    "reset_field_value": "Reset your account balance back to the starting $1000. This will also clear all your active bets."
   },
   "reset_command": {
     "confirm_button_label": "Yes, reset my account",
@@ -26,8 +28,16 @@
     "cancel_message": "ℹ️ Account reset has been cancelled.",
     "timeout_message": "⚠️ Reset confirmation has expired."
   },
+  "welcome_message": {
+    "title": "👋 Thanks for adding Valorant Predictor!",
+    "description": "I can predict match outcomes with Machine Learning and let you bet on live matches. Here's how to get started:",
+    "help_intro": "To see the full list of commands and their descriptions.",
+    "language_intro": "To set your preferred language for DMs and messages.",
+    "invite_text": "Need help or want to join the community? Join the official support server!",
+    "invite_button": "Join Support Server"
+  },
   "predict_command": {
-    "invalid_team_error": "❌ Invalid team name provided for prediction. Please use a valid name or abbreviation found in `main.py`.",
+    "invalid_team_error": "❌ Invalid team name provided for prediction. Please use a valid name or try again later.",
     "prediction_failed_title": "Prediction Failed",
     "prediction_failed_desc": "None of the models could generate a prediction.",
     "embed_title": "📈 Valorant Match Prediction",
@@ -37,9 +47,9 @@
     "model_header_model": "Model",
     "model_header_winner": "Winner",
     "model_header_confidence": "Confidence",
-    "tier_standard_title": "⭐ Standard",
-    "tier_advanced_title": "⭐⭐ Advanced",
-    "tier_deep_learning_title": "⭐⭐⭐ Deep Learning",
+    "tier_standard_title": "Ascendant",
+    "tier_advanced_title": "Immortal",
+    "tier_deep_learning_title": "Radiant",
     "model_failed": "Failed",
     "model_na": "N/A",
     "embed_footer": "Aggregated from {successful_models_count}/{len_results} successful models."

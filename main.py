@@ -1,92 +1,61 @@
-# main.py (Updated to enforce valid team names)
-
 import sys
 import os
+import json
 from importlib import import_module
-from typing import Optional
+from typing import Optional, Tuple, Dict
+import logging
 
 MODEL_VERSION = "1.0"
 
-# --- CONFIGURATION: Team Name Mapping ---
-# Maps full team names to their common abbreviations. The system will prioritize the full name.
-TEAM_NAME_MAPPING = {
-    "100 Thieves": "100T",
-    "2Game Esports": "2G",
-    "All Gamers": "AG",
-    "Apeks": "APEKS",
-    "Attacking Soul Esports": "ASE",
-    "BBL Esports": "BBL",
-    "BLEED": "BLD",
-    "BOOM Esports": "BOOM",
-    "Bilibili Gaming": "BLG",
-    "Cloud9": "C9",
-    "DRX": "DRX",
-    "DetonatioN FocusMe": "DFM",
-    "Douyu Gaming": "DYG",
-    "Dragon Ranger Gaming": "DRG",
-    "EDward Gaming": "EDG",
-    "Evil Geniuses": "EG",
-    "FNATIC": "FNC",
-    "FURIA": "FUR",
-    "FUT Esports": "FUT",
-    "Four Angry Men": "4AM",
-    "FunPlus Phoenix": "FPX",
-    "G2 Esports": "G2",
-    "GIANTX": "GX",
-    "Gank Gaming": "GNK",
-    "Gen.G": "GENG",
-    "Gentle Mates": "M8",
-    "Giants Gaming": "GIA",
-    "Global Esports": "GE",
-    "Guangzhou Huadu Bilibili Gaming(Bilibili Gaming)": "BLG",
-    "Invincible Gaming": "IG",
-    "JD Mall JDG Esports(JDG Esports)": "JDG",
-    "JDG Esports": "JDG",
-    "KOI": "KOI",
-    "KRU Esports": "KRU",
-    "Karmine Corp": "KC",
-    "Kingzone": "KZ",
-    "LEVIATAN": "LEV",
-    "LOUD": "LOUD",
-    "MIBR": "MIBR",
-    "Monarch Effect": "ME",
-    "Movistar KOI(KOI)": "KOI",
-    "NRG": "NRG",
-    "Natus Vincere": "NAVI",
-    "Night Wings Gaming": "NWG",
-    "Nongshim RedForce": "NS",
-    "Nova Esports": "NOVA",
-    "Number One Player": "NOP",
-    "Paper Rex": "PRX",
-    "Rare Atom": "RA",
-    "Rex Regum Qeon": "RRQ",
-    "Royal Never Give Up": "RNG",
-    "Sentinels": "SEN",
-    "Shenzhen NTER": "NTER",
-    "T1": "T1",
-    "TALON": "TLN",
-    "TYLOO": "TYL",
-    "Team Bunny": "TBNY",
-    "Team Heretics": "TH",
-    "Team Liquid": "TL",
-    "Team Secret": "TS",
-    "Team SuperBusS": "TSB",
-    "Team Vitality": "VIT",
-    "Titan Esports Club": "TEC",
-    "Totoro Gaming": "TRG",
-    "Trace Esports": "TE",
-    "VISA KRU(KRU Esports)": "KRU",
-    "Weibo Gaming": "WBG",
-    "Wolves Esports": "WLG",
-    "Xi Lai Gaming": "XLG",
-    "ZETA DIVISION": "ZETA",
-}
 
-# Create a reverse mapping for efficient lookups (abbreviation -> full name)
-# All keys are converted to lowercase for case-insensitive matching
-REVERSE_TEAM_MAPPING = {v.lower(): k for k, v in TEAM_NAME_MAPPING.items()}
+# --- NEW: Function to load team mappings from your JSON file ---
+def load_team_mappings(filepath: str) -> Tuple[Dict[str, str], Dict[str, str]]:
+    """
+    Loads the team name data from the specified JSON file.
 
-# --- CONFIGURATION: Define all models and their properties ---
+    Args:
+        filepath: The path to the vlr_team_short_names.json file.
+
+    Returns:
+        A tuple containing two dictionaries:
+        1. The original mapping (e.g., {"100 Thieves": "100T"})
+        2. A reverse mapping for lookups (e.g., {"100t": "100 Thieves"})
+    """
+    team_map = {}
+    reverse_team_map = {}
+
+    if not os.path.exists(filepath):
+        logging.critical(f"FATAL ERROR: Team name file not found at '{filepath}'. The bot cannot function without it.")
+        sys.exit(1)  # Exit if the file is missing
+
+    try:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+
+        team_map = data
+
+        # Create the reverse mapping for easy lookups (abbreviation -> full name)
+        for full_name, short_name in data.items():
+            # Use the full name itself (lowercased) as a possible key
+            reverse_team_map[full_name.lower()] = full_name
+            # If the short name is valid and not 'N/A', add it as a key
+            if short_name and short_name.lower() != 'n/a':
+                reverse_team_map[short_name.lower()] = full_name
+
+        logging.info(f"Successfully loaded {len(team_map)} team name mappings from {filepath}.")
+
+    except Exception as e:
+        logging.critical(f"FATAL ERROR: Failed to load or parse team name file '{filepath}': {e}")
+        sys.exit(1)
+
+    return team_map, reverse_team_map
+
+
+# --- CONFIGURATION: Load team names from the JSON file ---
+TEAM_DATA_FILE = 'vlr_team_short_names.json'
+TEAM_NAME_MAPPING, REVERSE_TEAM_MAPPING = load_team_mappings(TEAM_DATA_FILE)
+
+# --- CONFIGURATION: Define all models and their properties (Unchanged) ---
 MODELS_CONFIG = {
     'CatBoost': {
         'path': 'models/catboost',
@@ -150,22 +119,14 @@ MODELS_CONFIG = {
 # --- UPDATED: Team Name Normalization Function ---
 def normalize_team_name(name: str) -> Optional[str]:
     """
-    Converts a team abbreviation or alternate name to its official, full name.
-    Returns None if no mapping is found, indicating an invalid team.
+    Converts a team abbreviation or alternate name to its official, full name
+    using the loaded JSON data. Returns None if no mapping is found.
     """
     cleaned_name = name.strip().lower()
-    # Check if the input is an abbreviation (e.g., 'c9')
-    if cleaned_name in REVERSE_TEAM_MAPPING:
-        return REVERSE_TEAM_MAPPING[cleaned_name]
-    # Check if the input is already a full name (but maybe with wrong casing)
-    for full_name, abbr in TEAM_NAME_MAPPING.items():
-        if full_name.lower() == cleaned_name:
-            return full_name
-    # If no mapping found, return None
-    return None
+    return REVERSE_TEAM_MAPPING.get(cleaned_name, None)
 
 
-# --- MAIN PIPELINE LOGIC ---
+# --- MAIN PIPELINE LOGIC (Unchanged) ---
 
 def run_all_models(team_a, team_b, best_of):
     """
@@ -237,11 +198,12 @@ def main():
         team_b = normalize_team_name(team_b_input)
 
         if team_a is None:
-            print(f"\n[Error] Invalid team name: '{team_a_input}'. No data has been trained on this team.")
+            # Use f-string for clearer output
+            print(f"\n[Error] Invalid team name: '{team_a_input}'. Not found in the team database.")
             continue  # Restart the loop
 
         if team_b is None:
-            print(f"\n[Error] Invalid team name: '{team_b_input}'. No data has been trained on this team.")
+            print(f"\n[Error] Invalid team name: '{team_b_input}'. Not found in the team database.")
             continue  # Restart the loop
 
         print(f" > Normalized names: '{team_a_input}' -> '{team_a}', '{team_b_input}' -> '{team_b}'")
@@ -293,4 +255,6 @@ def main():
 if __name__ == '__main__':
     base_dir = os.path.dirname(os.path.abspath(__file__))
     os.chdir(base_dir)
+    # Configure logging for the CLI test
+    logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
     main()

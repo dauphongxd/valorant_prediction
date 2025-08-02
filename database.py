@@ -35,6 +35,88 @@ def initialize_database():
                        prediction_count INTEGER NOT NULL DEFAULT 0,
                                          language TEXT NOT NULL DEFAULT 'en' -- ADD THIS LINE
     )''')
+
+    # --- Bets Table (ADD guild_id) ---
+    cursor.execute('''
+                   CREATE TABLE IF NOT EXISTS bets
+                   (
+                       bet_id
+                       INTEGER
+                       PRIMARY
+                       KEY
+                       AUTOINCREMENT,
+                       user_id
+                       TEXT
+                       NOT
+                       NULL,
+                       match_id
+                       TEXT
+                       NOT
+                       NULL,
+                       guild_id
+                       TEXT
+                       NOT
+                       NULL, -- <-- ADD THIS LINE
+                       team_bet_on
+                       TEXT
+                       NOT
+                       NULL,
+                       opponent
+                       TEXT
+                       NOT
+                       NULL,
+                       amount
+                       REAL
+                       NOT
+                       NULL,
+                       odds
+                       REAL
+                       NOT
+                       NULL,
+                       status
+                       TEXT
+                       NOT
+                       NULL
+                       DEFAULT
+                       'ACTIVE',
+                       FOREIGN
+                       KEY
+                   (
+                       user_id
+                   ) REFERENCES users
+                   (
+                       user_id
+                   )
+                       )''')
+
+    # --- NEW: user_guilds table ---
+    # This table tracks which users are members of which guilds.
+    cursor.execute('''
+                   CREATE TABLE IF NOT EXISTS user_guilds
+                   (
+                       user_id
+                       TEXT
+                       NOT
+                       NULL,
+                       guild_id
+                       TEXT
+                       NOT
+                       NULL,
+                       PRIMARY
+                       KEY
+                   (
+                       user_id,
+                       guild_id
+                   ),
+                       FOREIGN KEY
+                   (
+                       user_id
+                   ) REFERENCES users
+                   (
+                       user_id
+                   )
+                       )''')
+
     cursor.execute('''
     CREATE TABLE IF NOT EXISTS bets (
         bet_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -134,7 +216,7 @@ def initialize_database():
 # --- The rest of your database.py file is correct and needs no changes. ---
 # get_user_account, place_bet, get_active_bets, etc. can all remain as they are.
 
-def get_user_account(user_id: str, username: str):
+def get_user_account(user_id: str, username: str, guild_id: str = None):
     conn = sqlite3.connect(DATABASE_FILE)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
@@ -149,18 +231,25 @@ def get_user_account(user_id: str, username: str):
     else:
         cursor.execute("UPDATE users SET username = ? WHERE user_id = ?", (username, user_id))
         conn.commit()
+
+    if guild_id:
+        cursor.execute(
+            "INSERT OR IGNORE INTO user_guilds (user_id, guild_id) VALUES (?, ?)",
+            (user_id, guild_id)
+        )
+        conn.commit()
     conn.close()
     return user
 
-def place_bet(user_id: str, match_id: str, team_bet_on: str, opponent: str, amount: float, odds: float):
+def place_bet(user_id: str, guild_id: str, match_id: str, team_bet_on: str, opponent: str, amount: float, odds: float):
     conn = sqlite3.connect(DATABASE_FILE)
     cursor = conn.cursor()
     try:
         cursor.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (amount, user_id))
         cursor.execute('''
-                       INSERT INTO bets (user_id, match_id, team_bet_on, opponent, amount, odds)
-                       VALUES (?, ?, ?, ?, ?, ?)
-                       ''', (user_id, match_id, team_bet_on, opponent, amount, odds))
+                       INSERT INTO bets (user_id, guild_id, match_id, team_bet_on, opponent, amount, odds)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)
+                       ''', (user_id, guild_id, match_id, team_bet_on, opponent, amount, odds))
         conn.commit()
         logging.info(f"Successfully placed bet for user {user_id} on match {match_id}")
     except Exception as e:
@@ -485,3 +574,80 @@ def reset_user_account(user_id: str):
         raise  # Re-raise the exception to be handled by the bot command
     finally:
         conn.close()
+
+
+def get_global_database_stats():
+    """
+    Fetches aggregate statistics across ALL users and bets in the database.
+    """
+    conn = sqlite3.connect(DATABASE_FILE)
+    cursor = conn.cursor()
+    stats = {
+        'total_users': 0,
+        'active_bets': 0,
+        'total_money': 0.0
+    }
+
+    try:
+        # --- Get Total Users ---
+        # Counts every unique user that has ever interacted with the bot.
+        cursor.execute("SELECT COUNT(*) FROM users")
+        result = cursor.fetchone()
+        if result:
+            stats['total_users'] = result[0]
+
+        # --- Get Active Bet Info ---
+        # Counts the number of active bets and sums the 'amount' column for those bets.
+        cursor.execute("SELECT COUNT(*), SUM(amount) FROM bets WHERE status = 'ACTIVE'")
+        active_bets_count, total_money_in_bets = cursor.fetchone()
+
+        # The result can be (None, None) if there are no active bets, so we handle that.
+        stats['active_bets'] = active_bets_count or 0
+        stats['total_money'] = total_money_in_bets or 0.0
+
+    except Exception as e:
+        logging.error(f"Failed to get GLOBAL database stats: {e}")
+        return None  # Return None on any error
+
+    finally:
+        conn.close()
+
+    return stats
+
+def get_guild_database_stats(guild_id: str):
+    """
+    Fetches aggregate statistics for a SPECIFIC server (guild).
+    """
+    conn = sqlite3.connect(DATABASE_FILE)
+    cursor = conn.cursor()
+    stats = {
+        'total_users': 0,
+        'active_bets': 0,
+        'total_money': 0.0
+    }
+
+    try:
+        # --- Get Total Users for THIS GUILD ---
+        # Counts users who have interacted with the bot within this specific guild.
+        # This query uses the new 'user_guilds' table.
+        cursor.execute("SELECT COUNT(*) FROM user_guilds WHERE guild_id = ?", (guild_id,))
+        result = cursor.fetchone()
+        if result:
+            stats['total_users'] = result[0]
+
+        # --- Get Active Bet Info for THIS GUILD ---
+        # Counts and sums only the bets that were placed in this specific guild.
+        cursor.execute("SELECT COUNT(*), SUM(amount) FROM bets WHERE guild_id = ? AND status = 'ACTIVE'", (guild_id,))
+        active_bets_count, total_money_in_bets = cursor.fetchone()
+
+        stats['active_bets'] = active_bets_count or 0
+        stats['total_money'] = total_money_in_bets or 0.0
+
+    except Exception as e:
+        logging.error(f"Failed to get GUILD-SPECIFIC database stats for guild {guild_id}: {e}")
+        return None # Return None on any error
+
+    finally:
+        conn.close()
+
+    return stats

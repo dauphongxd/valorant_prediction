@@ -1,4 +1,4 @@
-# collect_match_urls.py
+# collect_match_urls_by_event.py
 
 import requests
 from bs4 import BeautifulSoup

@@ -11,11 +11,21 @@
     "predict_field_title": "`/predict [đội_a] [đội_b] [thể_thức]`",
     "predict_field_value": "Dự đoán đội chiến thắng bằng 8 mô hình ML khác nhau.",
     "bet_field_title": "`/bet [đội_a] [đội_b]`",
-    "bet_field_value": "Đặt cược cho một trận đấu sắp diễn ra.\nSử dụng tỷ lệ cược trực tiếp từ VLR.gg.\nBạn bắt đầu với **$1000**.",
+    "bet_field_value": "Đặt cược cho một trận đấu sắp diễn ra.\nSử dụng tỷ lệ cược trực tiếp.\nBạn bắt đầu với **$1000**.",
     "balance_field_title": "`/balance`",
     "balance_field_value": "Kiểm tra số dư ví và xem các cược đang hoạt động của bạn.",
     "langue_field_title" : "/language",
-    "language_field_value" : "Đặt ngôn ngữ ưu tiên của bạn cho các thông báo và tin nhắn của bot."
+    "language_field_value" : "Đặt ngôn ngữ ưu tiên của bạn cho các thông báo và tin nhắn của bot.",
+    "reset_field_title": "`/reset`",
+    "reset_field_value": "Đặt lại số dư tài khoản của bạn về mốc ban đầu là $1000. Hành động này cũng sẽ xóa tất cả các cược đang hoạt động của bạn."
+  },
+  "welcome_message": {
+    "title": "👋 Cảm ơn đã thêm Valorant Predictor!",
+    "description": "Tôi có thể dự đoán kết quả trận đấu bằng Machine Learning và cho phép bạn cá cược vào các trận đấu trực tiếp. Đây là cách để bắt đầu:",
+    "help_intro": "Để xem danh sách đầy đủ các lệnh và mô tả của chúng.",
+    "language_intro": "Để đặt ngôn ngữ ưu tiên cho tin nhắn và thông báo.",
+    "invite_text": "Cần trợ giúp hoặc muốn tham gia cộng đồng? Hãy tham gia máy chủ hỗ trợ chính thức!",
+    "invite_button": "Tham Gia Máy Chủ Hỗ Trợ"
   },
   "reset_command": {
     "confirm_button_label": "Có, đặt lại tài khoản",
@@ -37,9 +47,9 @@
     "model_header_model": "Mô Hình",
     "model_header_winner": "Đội Thắng",
     "model_header_confidence": "Độ Tin Cậy",
-    "tier_standard_title": "⭐ Tiêu Chuẩn",
-    "tier_advanced_title": "⭐⭐ Nâng Cao",
-    "tier_deep_learning_title": "⭐⭐⭐ Học Sâu",
+    "tier_standard_title": "Ascendant",
+    "tier_advanced_title": "Immortal",
+    "tier_deep_learning_title": "Radiant",
     "model_failed": "Thất bại",
     "model_na": "Không có",
     "embed_footer": "Tổng hợp từ {successful_models_count}/{len_results} mô hình thành công."
