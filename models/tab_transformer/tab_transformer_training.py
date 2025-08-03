@@ -21,6 +21,17 @@ ARTIFACTS_FILE = 'tabtransformer_optimized_artifacts.pkl'
 TIME_WEIGHT_HALF_LIFE_DAYS = 90
 N_SPLITS_K_FOLD = 5
 N_OPTUNA_TRIALS = 30
+OPTUNA_MAX_EPOCHS = 75  # Reduced from 100
+OPTUNA_PATIENCE = 10    # Reduced from 15
+
+# --- Strategy 2: Fast Iteration ---
+# Good for quickly checking if the pipeline works or for rapid experimentation.
+# The result will be good, but maybe not the absolute best.
+# N_SPLITS_K_FOLD = 3
+# N_OPTUNA_TRIALS = 20
+# OPTUNA_MAX_EPOCHS = 50
+# OPTUNA_PATIENCE = 8
+# ---
 
 
 # --- HELPER WRAPPER CLASS FOR TRAINING ---
@@ -33,27 +44,17 @@ class TabTransformerWrapper:
         self.lr = kwargs.pop('lr', 2e-2)
         self.verbose = kwargs.pop('verbose', True)
         self.device = kwargs.pop('device_name', 'cuda' if torch.cuda.is_available() else 'cpu')
-
-        # --- FIX #1: Store num_continuous ---
-        # It's a model parameter, but we need it for slicing, so we store it separately.
         self.num_continuous = kwargs.get('num_continuous', 0)
-
-        # The rest are model hyperparameters
         self.model = TabTransformer(**kwargs).to(self.device)
         self.best_val_loss = float('inf')
         self.patience_counter = 0
 
     def fit(self, X_train, y_train, eval_set=None):
-        # --- FIX #2: Use self.num_continuous to slice the data correctly ---
-        # Continuous features are the first 'self.num_continuous' columns
-        # Categorical features are the rest
         X_train_cont = torch.tensor(X_train[:, :self.num_continuous], dtype=torch.float).to(self.device)
         X_train_cat = torch.tensor(X_train[:, self.num_continuous:], dtype=torch.long).to(self.device)
         y_train = torch.tensor(y_train, dtype=torch.float).unsqueeze(1).to(self.device)
-
         train_dataset = TensorDataset(X_train_cat, X_train_cont, y_train)
         train_loader = DataLoader(train_dataset, batch_size=self.batch_size, shuffle=True)
-
         if eval_set:
             X_val, y_val = eval_set[0]
             X_val_cont = torch.tensor(X_val[:, :self.num_continuous], dtype=torch.float).to(self.device)
@@ -61,10 +62,8 @@ class TabTransformerWrapper:
             y_val = torch.tensor(y_val, dtype=torch.float).unsqueeze(1).to(self.device)
             val_dataset = TensorDataset(X_val_cat, X_val_cont, y_val)
             val_loader = DataLoader(val_dataset, batch_size=self.batch_size)
-
         optimizer = torch.optim.Adam(self.model.parameters(), lr=self.lr)
         criterion = nn.BCEWithLogitsLoss()
-
         for epoch in range(self.max_epochs):
             self.model.train()
             for x_cat, x_cont, y in train_loader:
@@ -73,7 +72,6 @@ class TabTransformerWrapper:
                 loss = criterion(pred, y)
                 loss.backward()
                 optimizer.step()
-
             if eval_set:
                 self.model.eval()
                 val_loss = 0
@@ -82,10 +80,8 @@ class TabTransformerWrapper:
                         pred = self.model(x_cat, x_cont)
                         val_loss += criterion(pred, y).item()
                 val_loss /= len(val_loader)
-
                 if self.verbose and (epoch % 10 == 0):
                     print(f"Epoch {epoch + 1}/{self.max_epochs}, Val Loss: {val_loss:.4f}")
-
                 if val_loss < self.best_val_loss:
                     self.best_val_loss = val_loss
                     self.patience_counter = 0
@@ -98,26 +94,31 @@ class TabTransformerWrapper:
 
     def predict_proba(self, X_pred):
         self.model.eval()
-        # --- FIX #3: Use self.num_continuous to slice the data correctly here as well ---
         X_pred_cont = torch.tensor(X_pred[:, :self.num_continuous], dtype=torch.float).to(self.device)
         X_pred_cat = torch.tensor(X_pred[:, self.num_continuous:], dtype=torch.long).to(self.device)
-
         with torch.no_grad():
             preds = self.model(X_pred_cat, X_pred_cont)
             probs = torch.sigmoid(preds).cpu().numpy()
-
         return np.hstack([1 - probs, probs])
 
 
 # --- The rest of the script is largely fine, but we must ensure the data order ---
 
 def calculate_advanced_stats(df):
-    # This function is unchanged...
+    """
+    Calculates time-weighted and head-to-head stats.
+    This version includes a fix for division-by-zero when calculating KDR.
+    """
     print("Step 1: Calculating advanced time-weighted statistics from original data...")
     df['match_date'] = pd.to_datetime(df['match_date'])
     if df['match_date'].duplicated().any():
         print("WARNING: Duplicate dates found, EWM stats may be incorrect if data was pre-augmented.")
-    df['kdr_diff'] = (df['kills_diff'] / df['deaths_diff'].abs()).fillna(0)
+
+    # FIX for infinity values
+    kdr_diff = df['kills_diff'] / df['deaths_diff'].abs()
+    df['kdr_diff'] = kdr_diff.replace([np.inf, -np.inf], 0).fillna(0)
+
+    # --- END FIX ---
 
     def get_ewm_stats(sub_df):
         stat_cols = ['acs_diff', 'kdr_diff', 'assists_diff']
@@ -145,15 +146,15 @@ def calculate_advanced_stats(df):
         perspective_team = key[0];
         group['perspective_win'] = (group['team_a'] == perspective_team) == group['team_a_win']
         ewm_win_rate = \
-        group['perspective_win'].ewm(halflife=f'{TIME_WEIGHT_HALF_LIFE_DAYS}D', times=group['match_date']).mean().iloc[
-            -1]
+            group['perspective_win'].ewm(halflife=f'{TIME_WEIGHT_HALF_LIFE_DAYS}D',
+                                         times=group['match_date']).mean().iloc[
+                -1]
         h2h_stats[key] = ewm_win_rate
     print("Advanced stats calculation complete.")
     return global_stats, map_stats, h2h_stats
 
 
 def create_feature_dataset(df, global_stats, map_stats, h2h_stats):
-    # This function is unchanged...
     print("Step 2: Engineering features from advanced stats...")
     rows = []
     default_stats = {'ewm_acs': 0.0, 'ewm_kdr': 0.0, 'ewm_assists': 0.0}
@@ -184,35 +185,42 @@ def main():
     print(f"Using device: {device.upper()}")
 
     # Stages 1-3 are unchanged
-    df_original = pd.read_csv(DATA_FILE);
+    df_original = pd.read_csv(DATA_FILE)
     df_original.drop(columns=['match_id', 'event_stage'], inplace=True, errors='ignore')
     global_stats, map_stats, h2h_stats = calculate_advanced_stats(df_original)
     model_df = create_feature_dataset(df_original, global_stats, map_stats, h2h_stats)
     print("\nStep 3: Augmenting final feature set for perfect symmetry...")
     categorical_features = ['map_name', 'best_of']
     numerical_features = [col for col in model_df.columns if col not in categorical_features + ['target']]
-    model_df_flipped = model_df.copy();
-    model_df_flipped[numerical_features] = -model_df_flipped[numerical_features];
+    model_df_flipped = model_df.copy()
+    model_df_flipped[numerical_features] = -model_df_flipped[numerical_features]
     model_df_flipped['target'] = 1 - model_df_flipped['target']
     final_model_df = pd.concat([model_df, model_df_flipped], ignore_index=True).sample(frac=1, random_state=42)
     print(f"Symmetrical training data created. Total rows: {len(final_model_df)}")
+
+    # --- Data Validation Check ---
+    print("Validating final feature set for invalid numbers...")
+    numeric_cols_to_check = final_model_df[numerical_features]
+    if np.isinf(numeric_cols_to_check.values).any() or numeric_cols_to_check.isnull().values.any():
+        print("\n--- FATAL ERROR ---")
+        print("Invalid values (NaN or Infinity) found in the feature set before training.")
+        exit()
+    else:
+        print("Validation passed. No NaN or Infinity values found.")
 
     X = final_model_df[numerical_features + categorical_features]
     y = final_model_df['target']
 
     label_encoders = {}
     for col in categorical_features:
-        le = LabelEncoder();
-        all_categories = list(model_df[col].astype(str).unique()) + ['__UNKNOWN__'];
+        le = LabelEncoder()
+        all_categories = list(model_df[col].astype(str).unique()) + ['__UNKNOWN__']
         le.fit(all_categories)
-        X[col] = le.transform(X[col].astype(str));
+        X[col] = le.transform(X[col].astype(str))
         label_encoders[col] = le
 
     cat_dims = [len(le.classes_) for le in label_encoders.values()]
     num_continuous = len(numerical_features)
-
-    # --- FIX #4: ENSURE COLUMN ORDER ---
-    # The wrapper expects continuous features first, then categorical. We must enforce this order.
     X = X[numerical_features + categorical_features]
 
     print(f"\nStep 4: Starting Optuna hyperparameter search for TabTransformer ({N_OPTUNA_TRIALS} trials)...")
@@ -236,8 +244,9 @@ def main():
             lr=lr,
             device_name=device,
             verbose=False,
-            patience=15,
-            max_epochs=100
+            # --- MODIFICATION: Use the new variables ---
+            patience=OPTUNA_PATIENCE,
+            max_epochs=OPTUNA_MAX_EPOCHS
         )
 
         kf = KFold(n_splits=N_SPLITS_K_FOLD, shuffle=True, random_state=42)
@@ -245,18 +254,14 @@ def main():
         for i, (train_idx, val_idx) in enumerate(kf.split(X.values, y.values)):
             X_train, y_train = X.values[train_idx], y.values[train_idx]
             X_val, y_val = X.values[val_idx], y.values[val_idx]
-
             model = TabTransformerWrapper(**transformer_params)
             model.fit(X_train, y_train, eval_set=[(X_val, y_val)])
-
             preds = model.predict_proba(X_val)[:, 1]
             score = roc_auc_score(y_val, preds)
             cv_scores.append(score)
-
             trial.report(score, i)
             if trial.should_prune():
                 raise optuna.exceptions.TrialPruned()
-
         return np.mean(cv_scores)
 
     study = optuna.create_study(direction="maximize", study_name="TabTransformer Optimization",
@@ -279,6 +284,7 @@ def main():
         lr=best_params['lr'],
         device_name=device,
         verbose=True,
+        # --- NO CHANGE HERE: Final training should be thorough ---
         patience=20,
         max_epochs=150
     )

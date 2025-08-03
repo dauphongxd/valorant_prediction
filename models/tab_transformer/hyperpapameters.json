@@ -1,0 +1,1 @@
+Best hyperparameters: {'dim': 16, 'depth': 5, 'heads': 2, 'attn_dropout': 0.3304305360712013, 'ff_dropout': 0.29906542216653237, 'lr': 0.0012612513641909872}

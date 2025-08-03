@@ -6,207 +6,71 @@ import json
 import os
 from datetime import datetime
 import numpy as np
+import unicodedata
 
 DATABASE_FILE = 'valorant_bot.db'
+
+
+# This function properly normalizes names for searching, converting "KRÜ" to "kru".
+def normalize_for_search(name: str) -> str:
+    """Converts a name to lowercase and removes diacritics for database searching."""
+    if not name:
+        return ""
+    # NFD form separates base characters from their accents
+    nfkd_form = unicodedata.normalize('NFD', name)
+    # We then keep only the base characters (non-combining)
+    only_ascii = "".join([c for c in nfkd_form if not unicodedata.combining(c)])
+    return only_ascii.lower()
 
 def initialize_database():
     """Creates the database and tables if they don't exist."""
     conn = sqlite3.connect(DATABASE_FILE)
     cursor = conn.cursor()
 
-    # --- CORRECTED: Full table definitions ---
+    # (users, bets, user_guilds tables are unchanged)
     cursor.execute('''
                    CREATE TABLE IF NOT EXISTS users
-                   (
-                       user_id
-                       TEXT
-                       PRIMARY
-                       KEY,
-                       username
-                       TEXT
-                       NOT
-                       NULL,
-                       balance
-                       REAL
-                       NOT
-                       NULL
-                       DEFAULT
-                       1000.0,
-                       prediction_count INTEGER NOT NULL DEFAULT 0,
-                                         language TEXT NOT NULL DEFAULT 'en' -- ADD THIS LINE
-    )''')
-
-    # --- Bets Table (ADD guild_id) ---
+                   (user_id TEXT PRIMARY KEY, username TEXT NOT NULL, balance REAL NOT NULL DEFAULT 1000.0,
+                    prediction_count INTEGER NOT NULL DEFAULT 0, language TEXT NOT NULL DEFAULT 'en')''')
     cursor.execute('''
                    CREATE TABLE IF NOT EXISTS bets
-                   (
-                       bet_id
-                       INTEGER
-                       PRIMARY
-                       KEY
-                       AUTOINCREMENT,
-                       user_id
-                       TEXT
-                       NOT
-                       NULL,
-                       match_id
-                       TEXT
-                       NOT
-                       NULL,
-                       guild_id
-                       TEXT
-                       NOT
-                       NULL, -- <-- ADD THIS LINE
-                       team_bet_on
-                       TEXT
-                       NOT
-                       NULL,
-                       opponent
-                       TEXT
-                       NOT
-                       NULL,
-                       amount
-                       REAL
-                       NOT
-                       NULL,
-                       odds
-                       REAL
-                       NOT
-                       NULL,
-                       status
-                       TEXT
-                       NOT
-                       NULL
-                       DEFAULT
-                       'ACTIVE',
-                       FOREIGN
-                       KEY
-                   (
-                       user_id
-                   ) REFERENCES users
-                   (
-                       user_id
-                   )
-                       )''')
-
-    # --- NEW: user_guilds table ---
-    # This table tracks which users are members of which guilds.
+                   (bet_id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, match_id TEXT NOT NULL,
+                    guild_id TEXT NOT NULL, team_bet_on TEXT NOT NULL, opponent TEXT NOT NULL,
+                    amount REAL NOT NULL, odds REAL NOT NULL, status TEXT NOT NULL DEFAULT 'ACTIVE',
+                    FOREIGN KEY (user_id) REFERENCES users (user_id))''')
     cursor.execute('''
                    CREATE TABLE IF NOT EXISTS user_guilds
-                   (
-                       user_id
-                       TEXT
-                       NOT
-                       NULL,
-                       guild_id
-                       TEXT
-                       NOT
-                       NULL,
-                       PRIMARY
-                       KEY
-                   (
-                       user_id,
-                       guild_id
-                   ),
-                       FOREIGN KEY
-                   (
-                       user_id
-                   ) REFERENCES users
-                   (
-                       user_id
-                   )
-                       )''')
+                   (user_id TEXT NOT NULL, guild_id TEXT NOT NULL,
+                    PRIMARY KEY (user_id, guild_id), FOREIGN KEY (user_id) REFERENCES users (user_id))''')
 
-    cursor.execute('''
-    CREATE TABLE IF NOT EXISTS bets (
-        bet_id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id TEXT NOT NULL,
-        match_id TEXT NOT NULL,
-        team_bet_on TEXT NOT NULL,
-        opponent TEXT NOT NULL,
-        amount REAL NOT NULL,
-        odds REAL NOT NULL,
-        status TEXT NOT NULL DEFAULT 'ACTIVE',
-        FOREIGN KEY (user_id) REFERENCES users (user_id)
-    )''')
-
-    # --- Tables for caching match data ---
+    # --- MODIFIED 'matches' TABLE ---
+    # We add two new columns to store search-friendly names.
     cursor.execute('''
     CREATE TABLE IF NOT EXISTS matches (
         vlr_url TEXT PRIMARY KEY,
         team1_name TEXT NOT NULL,
         team2_name TEXT NOT NULL,
+        norm_team1_name TEXT NOT NULL,
+        norm_team2_name TEXT NOT NULL,
         match_time TEXT NOT NULL,
         status TEXT NOT NULL,
         last_odds_update TIMESTAMP
     )''')
+    # --- END MODIFICATION ---
 
+    # (odds and predictions tables are unchanged)
     cursor.execute('''
     CREATE TABLE IF NOT EXISTS odds (
-        odd_id INTEGER PRIMARY KEY AUTOINCREMENT,
-        match_url TEXT NOT NULL,
-        bookmaker TEXT NOT NULL,
-        team1_odds REAL NOT NULL,
-        team2_odds REAL NOT NULL,
-        FOREIGN KEY(match_url) REFERENCES matches (vlr_url) ON DELETE CASCADE
-    )''')
-
+        odd_id INTEGER PRIMARY KEY AUTOINCREMENT, match_url TEXT NOT NULL, bookmaker TEXT NOT NULL,
+        team1_odds REAL NOT NULL, team2_odds REAL NOT NULL,
+        FOREIGN KEY(match_url) REFERENCES matches (vlr_url) ON DELETE CASCADE)''')
     cursor.execute('''
                    CREATE TABLE IF NOT EXISTS predictions
-                   (
-                       prediction_id
-                       INTEGER
-                       PRIMARY
-                       KEY
-                       AUTOINCREMENT,
-                       team_a
-                       TEXT
-                       NOT
-                       NULL,
-                       team_b
-                       TEXT
-                       NOT
-                       NULL,
-                       best_of
-                       TEXT
-                       NOT
-                       NULL,
-                       model_version
-                       TEXT
-                       NOT
-                       NULL,
-                       winner
-                       TEXT
-                       NOT
-                       NULL,
-                       winner_prob
-                       REAL
-                       NOT
-                       NULL,
-                       successful_models
-                       INTEGER
-                       NOT
-                       NULL,
-                       total_models
-                       INTEGER
-                       NOT
-                       NULL,
-                       results_json
-                       TEXT
-                       NOT
-                       NULL, -- Store the detailed model breakdown as JSON
-                       created_at
-                       TIMESTAMP
-                       DEFAULT
-                       CURRENT_TIMESTAMP,
-                       UNIQUE
-                   (
-                       team_a,
-                       team_b,
-                       best_of,
-                       model_version
-                   )
-                       )''')
+                   (prediction_id INTEGER PRIMARY KEY AUTOINCREMENT, team_a TEXT NOT NULL, team_b TEXT NOT NULL,
+                    best_of TEXT NOT NULL, model_version TEXT NOT NULL, winner TEXT NOT NULL, winner_prob REAL NOT NULL,
+                    successful_models INTEGER NOT NULL, total_models INTEGER NOT NULL, results_json TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE (team_a, team_b, best_of, model_version))''')
 
     conn.commit()
     conn.close()
@@ -276,17 +140,30 @@ def update_prediction_count(user_id: str):
     conn.close()
 
 def upsert_matches(match_list: list):
+    """
+    Saves or updates match data, now including pre-normalized names for searching.
+    """
     conn = sqlite3.connect(DATABASE_FILE)
     cursor = conn.cursor()
     for match in match_list:
+        # --- MODIFICATION ---
+        # Normalize the names before inserting/updating
+        norm_t1 = normalize_for_search(match['team1_name'])
+        norm_t2 = normalize_for_search(match['team2_name'])
+
         cursor.execute('''
-                       INSERT INTO matches (vlr_url, team1_name, team2_name, match_time, status)
-                       VALUES (?, ?, ?, ?, ?) ON CONFLICT(vlr_url) DO
+                       INSERT INTO matches (vlr_url, team1_name, team2_name, norm_team1_name, norm_team2_name, match_time, status)
+                       VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(vlr_url) DO
                        UPDATE SET
                            match_time = excluded.match_time,
-                           status = excluded.status
-                       ''', (match['vlr_url'], match['team1_name'], match['team2_name'], match['match_time'],
-                             match['status']))
+                           status = excluded.status,
+                           -- Also update the normalized names in case a team name changes
+                           norm_team1_name = excluded.norm_team1_name,
+                           norm_team2_name = excluded.norm_team2_name
+                       ''', (match['vlr_url'], match['team1_name'], match['team2_name'],
+                             norm_t1, norm_t2, # Add the new values
+                             match['match_time'], match['status']))
+        # --- END MODIFICATION ---
     conn.commit()
     conn.close()
     logging.info(f"Upserted {len(match_list)} matches into the database.")
@@ -343,20 +220,30 @@ def update_match_odds(match_url: str, odds_data: list):
         conn.close()
 
 def get_match_for_betting(team1_query: str, team2_query: str):
+    """
+    Finds a match for betting by searching the pre-normalized name columns.
+    """
     conn = sqlite3.connect(DATABASE_FILE)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
-    norm_t1 = f"%{team1_query.lower()}%"
-    norm_t2 = f"%{team2_query.lower()}%"
+
+    # --- MODIFICATION ---
+    # Normalize the user's search query using the same function
+    norm_t1_query = f"%{normalize_for_search(team1_query)}%"
+    norm_t2_query = f"%{normalize_for_search(team2_query)}%"
+
+    # Search against the new 'norm_teamX_name' columns instead of the original names
+    # We no longer need the LOWER() function in SQL.
     cursor.execute('''
                    SELECT *
                    FROM matches
-                   WHERE (LOWER(team1_name) LIKE ? AND LOWER(team2_name) LIKE ?)
-                      OR (LOWER(team1_name) LIKE ? AND LOWER(team2_name) LIKE ?)
-                       AND status
-                       != 'completed' AND status != 'final'
-                   ORDER BY last_odds_update DESC LIMIT 1
-                   ''', (norm_t1, norm_t2, norm_t2, norm_t1))
+                   WHERE (norm_team1_name LIKE ? AND norm_team2_name LIKE ?)
+                      OR (norm_team1_name LIKE ? AND norm_team2_name LIKE ?)
+                       AND status != 'COMPLETED' AND status != 'Final'
+                   ORDER BY last_odds_update DESC, match_time ASC LIMIT 1
+                   ''', (norm_t1_query, norm_t2_query, norm_t2_query, norm_t1_query))
+    # --- END MODIFICATION ---
+
     match = cursor.fetchone()
     if not match:
         conn.close()
@@ -651,3 +538,29 @@ def get_guild_database_stats(guild_id: str):
         conn.close()
 
     return stats
+
+def get_leaderboard_for_guild(guild_id: str, limit: int = 10):
+    """
+    Fetches the top users for a specific guild, ranked by their global balance.
+    """
+    conn = sqlite3.connect(DATABASE_FILE)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    leaderboard_data = []
+    try:
+        # This query joins the 'users' and 'user_guilds' tables,
+        # filters by the specific guild_id, and then orders by the global balance.
+        cursor.execute('''
+            SELECT u.username, u.balance
+            FROM users u
+            JOIN user_guilds ug ON u.user_id = ug.user_id
+            WHERE ug.guild_id = ?
+            ORDER BY u.balance DESC
+            LIMIT ?
+        ''', (guild_id, limit))
+        leaderboard_data = [dict(row) for row in cursor.fetchall()]
+    except Exception as e:
+        logging.error(f"Failed to get leaderboard for guild {guild_id}: {e}")
+    finally:
+        conn.close()
+    return leaderboard_data

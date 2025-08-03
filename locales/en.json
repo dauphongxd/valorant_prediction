@@ -14,10 +14,18 @@
     "bet_field_value": "Place a bet on an upcoming match.\nUses live odds.\nYou start with **$1000**.",
     "balance_field_title": "`/balance`",
     "balance_field_value": "Check your current wallet balance and see your active bets.",
+    "leaderboard_field_title": "`/leaderboard`",
+    "leaderboard_field_value": "Shows the top 10 users in the server, ranked by their global balance.",
     "language_field_title" : "`/language`",
     "language_field_value" : "Set your preferred language for bot notifications and messages.",
     "reset_field_title": "`/reset`",
     "reset_field_value": "Reset your account balance back to the starting $1000. This will also clear all your active bets."
+  },
+  "leaderboard_command": {
+    "dm_error": "❌ The leaderboard can only be viewed from within a server.",
+    "embed_title": "🏆 Leaderboard for {server_name}",
+    "no_one_on_board": "There are no users on the leaderboard yet.",
+    "footer_text": "Showing top users in this server, ranked by their global balance."
   },
   "reset_command": {
     "confirm_button_label": "Yes, reset my account",
@@ -80,7 +88,8 @@
     "bet_amount_field": "Bet Amount",
     "payout_field": "Potential Payout",
     "new_balance_footer": "Your new balance is ${new_balance:.2f}. Good luck!",
-    "generic_error": "❌ An error occurred while placing your bet. Please try again."
+    "generic_error": "❌ An error occurred while placing your bet. Please try again.",
+    "dm_error": "❌ Bets must be placed from within a server channel, not from Direct Messages."
   },
   "betting_view": {
     "expired_footer": "This betting slip has expired."

@@ -67,13 +67,11 @@ tree = app_commands.CommandTree(client)
 class BettingModal(ui.Modal):  # <-- Remove the static title from here
     # <-- Add user_locale to the constructor
     def __init__(self, team_bet_on: str, opponent: str, odds: float, match_id: str, user_locale: str):
-        # <-- Set the title dynamically using the translator
         super().__init__(title=translator.get_string("betting_modal.modal_title", user_locale))
         self.team_bet_on = team_bet_on
         self.opponent = opponent
         self.odds = odds
         self.match_id = match_id
-        # <-- Translate the input field's label and placeholder
         self.amount_input = ui.TextInput(
             label=translator.get_string("betting_modal.amount_label", user_locale, team_bet_on=self.team_bet_on),
             placeholder=translator.get_string("betting_modal.amount_placeholder", user_locale),
@@ -82,33 +80,44 @@ class BettingModal(ui.Modal):  # <-- Remove the static title from here
         self.add_item(self.amount_input)
 
     async def on_submit(self, interaction: discord.Interaction):
-        # 1. Get the user's full account from the database
+        # 1. Get user account and language
         account = await get_user_account(str(interaction.user.id), str(interaction.user))
-
-        # 2. Get their saved language, defaulting to 'en' if something goes wrong
         user_locale = account['language'] if account else 'en'
+
+        # 2. Validate the bet amount
         try:
             amount = float(self.amount_input.value)
             if amount <= 0: raise ValueError("Amount must be positive.")
         except ValueError:
-            # <-- Translate error message
             await interaction.response.send_message(
                 translator.get_string("betting_modal.invalid_amount_error", user_locale), ephemeral=True)
             return
 
+        # 3. Re-fetch account to ensure the balance is current
         account = await get_user_account(str(interaction.user.id), str(interaction.user))
 
+        # 4. Check for sufficient funds
         if amount > account['balance']:
-            # <-- Translate error message
             await interaction.response.send_message(
                 translator.get_string("betting_modal.insufficient_funds_error", user_locale,
                                       balance=account['balance']),
                 ephemeral=True)
             return
 
+        # 5. --- THIS IS THE FIX ---
+        # Ensure the interaction is from a server (guild) and not a DM.
+        if not interaction.guild:
+            await interaction.response.send_message(
+                translator.get_string("betting_modal.dm_error", user_locale), # Use the new translation key
+                ephemeral=True
+            )
+            return
+        # --- END OF FIX ---
+
+        # 6. Proceed with placing the bet
         try:
             loop = asyncio.get_running_loop()
-            guild_id = str(interaction.guild.id)
+            guild_id = str(interaction.guild.id)  # This line is now safe
             await loop.run_in_executor(
                 None,
                 database.place_bet,
@@ -119,7 +128,7 @@ class BettingModal(ui.Modal):  # <-- Remove the static title from here
             new_balance = account['balance'] - amount
             payout = amount * self.odds
 
-            # <-- Translate the entire confirmation embed
+            # Build and send the confirmation embed
             embed = discord.Embed(
                 title=translator.get_string("betting_modal.bet_confirmed_title", user_locale),
                 color=discord.Color.green(),
@@ -138,7 +147,6 @@ class BettingModal(ui.Modal):  # <-- Remove the static title from here
 
         except Exception as e:
             logging.error(f"Error during bet submission for {interaction.user}: {e}")
-            # <-- Translate generic error
             await interaction.response.send_message(translator.get_string("betting_modal.generic_error", user_locale),
                                                     ephemeral=True)
 
@@ -339,7 +347,7 @@ async def help_command(interaction: discord.Interaction):
     # 1. Get the user's full account from the database
     account = await get_user_account(str(interaction.user.id), str(interaction.user))
 
-    # 2. Get their saved language, defaulting to 'en' if something goes wrong
+    # 2. Get their saved language
     user_locale = account['language'] if account else 'en'
 
     embed = discord.Embed(
@@ -365,6 +373,11 @@ async def help_command(interaction: discord.Interaction):
     embed.add_field(
         name=translator.get_string("help_command.balance_field_title", user_locale),
         value=translator.get_string("help_command.balance_field_value", user_locale),
+        inline=False
+    )
+    embed.add_field(
+        name=translator.get_string("help_command.leaderboard_field_title", user_locale),
+        value=translator.get_string("help_command.leaderboard_field_value", user_locale),
         inline=False
     )
     embed.add_field(
@@ -829,6 +842,49 @@ async def reset_command(interaction: discord.Interaction):
         timeout_text = translator.get_string("reset_command.timeout_message", user_locale)
         await interaction.followup.send(timeout_text, ephemeral=True)
 
+
+# --- LEADERBOARD COMMAND ---
+
+@tree.command(name="leaderboard", description="Shows the top users by balance in this server.")
+async def leaderboard_command(interaction: discord.Interaction):
+    await interaction.response.defer()
+
+    # Get the user's language preference
+    account = await get_user_account(str(interaction.user.id), str(interaction.user))
+    user_locale = account['language'] if account else 'en'
+
+    # This command only works in a server
+    if not interaction.guild:
+        await interaction.followup.send(translator.get_string("leaderboard_command.dm_error", user_locale))
+        return
+
+    # Fetch leaderboard data from the database
+    guild_id = str(interaction.guild.id)
+    loop = asyncio.get_running_loop()
+    leaderboard_data = await loop.run_in_executor(None, database.get_leaderboard_for_guild, guild_id)
+
+    # Create the embed
+    embed = discord.Embed(
+        title=translator.get_string("leaderboard_command.embed_title", user_locale, server_name=interaction.guild.name),
+        color=discord.Color.gold()
+    )
+
+    if not leaderboard_data:
+        embed.description = translator.get_string("leaderboard_command.no_one_on_board", user_locale)
+    else:
+        leaderboard_entries = []
+        rank_emojis = ["🥇", "🥈", "🥉"]
+        for i, user in enumerate(leaderboard_data):
+            rank = rank_emojis[i] if i < 3 else f"**`{i + 1}.`**"
+            username = user['username']
+            balance = user['balance']
+            leaderboard_entries.append(f"{rank} **{username}** - `${balance:,.2f}`")
+
+        embed.description = "\n".join(leaderboard_entries)
+
+    embed.set_footer(text=translator.get_string("leaderboard_command.footer_text", user_locale))
+
+    await interaction.followup.send(embed=embed)
 
 # --- STATS COMMAND ---
 @tree.command(name="stats", description="Shows bot statistics (Admin only).")

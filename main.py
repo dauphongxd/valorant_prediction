@@ -5,7 +5,7 @@ from importlib import import_module
 from typing import Optional, Tuple, Dict
 import logging
 
-MODEL_VERSION = "1.0"
+MODEL_VERSION = "1.1"
 
 
 # --- NEW: Function to load team mappings from your JSON file ---
@@ -131,7 +131,7 @@ def normalize_team_name(name: str) -> Optional[str]:
 def run_all_models(team_a, team_b, best_of):
     """
     Iterates through all configured models, runs their prediction, and collects the results.
-    Map name is no longer a parameter here.
+    Map name is no longer a parameter here
     """
     all_predictions = []
     map_name = 'N/A'  # Hardcode map_name since it's no longer a user input

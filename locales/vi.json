@@ -14,10 +14,18 @@
     "bet_field_value": "Đặt cược cho một trận đấu sắp diễn ra.\nSử dụng tỷ lệ cược trực tiếp.\nBạn bắt đầu với **$1000**.",
     "balance_field_title": "`/balance`",
     "balance_field_value": "Kiểm tra số dư ví và xem các cược đang hoạt động của bạn.",
+    "leaderboard_field_title": "`/leaderboard`",
+    "leaderboard_field_value": "Hiển thị 10 người dùng hàng đầu trong máy chủ, được xếp hạng theo số tiền.",
     "langue_field_title" : "/language",
     "language_field_value" : "Đặt ngôn ngữ ưu tiên của bạn cho các thông báo và tin nhắn của bot.",
     "reset_field_title": "`/reset`",
     "reset_field_value": "Đặt lại số dư tài khoản của bạn về mốc ban đầu là $1000. Hành động này cũng sẽ xóa tất cả các cược đang hoạt động của bạn."
+  },
+  "leaderboard_command": {
+    "dm_error": "❌ Bảng xếp hạng chỉ có thể được xem từ trong một máy chủ.",
+    "embed_title": "🏆 Bảng Xếp Hạng cho {server_name}",
+    "no_one_on_board": "Chưa có ai trên bảng xếp hạng.",
+    "footer_text": "Hiển thị người dùng hàng đầu trong máy chủ này, xếp hạng theo số dư toàn cục."
   },
   "welcome_message": {
     "title": "👋 Cảm ơn đã thêm Valorant Predictor!",
@@ -80,7 +88,8 @@
     "bet_amount_field": "Số Tiền Cược",
     "payout_field": "Thanh Toán Tiềm Năng",
     "new_balance_footer": "Số dư mới của bạn là ${new_balance:.2f}. Chúc may mắn!",
-    "generic_error": "❌ Đã xảy ra lỗi khi đặt cược. Vui lòng thử lại."
+    "generic_error": "❌ Đã xảy ra lỗi khi đặt cược. Vui lòng thử lại.",
+    "dm_error": "❌ Cược phải được đặt từ một kênh trong máy chủ, không phải từ Tin Nhắn Riêng."
   },
   "betting_view": {
     "expired_footer": "Phiếu cược này đã hết hạn."

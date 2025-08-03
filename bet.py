@@ -1,7 +1,10 @@
 import logging
 import unicodedata
 from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
+# --- NEW IMPORTS ---
+from selenium.webdriver.chrome.service import Service as ChromeService
+from webdriver_manager.chrome import ChromeDriverManager
+# --- END NEW IMPORTS ---
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
@@ -17,7 +20,7 @@ def normalize_name(name):
 
 def scrape_upcoming_matches_list():
     """Scrapes the main vlr.gg/matches page to get a list of all upcoming matches."""
-    service = Service(executable_path='./chromedriver.exe')
+    service = ChromeService(ChromeDriverManager().install())
     options = webdriver.ChromeOptions()
     options.add_argument('--headless')
     options.add_argument('--log-level=3')
@@ -62,7 +65,7 @@ def scrape_upcoming_matches_list():
 
 def scrape_results_page():
     """Scrapes the main vlr.gg/matches page to get a list of all upcoming matches."""
-    service = Service(executable_path='./chromedriver.exe')
+    service = ChromeService(ChromeDriverManager().install())
     options = webdriver.ChromeOptions()
     options.add_argument('--headless')
     options.add_argument('--log-level=3')
@@ -73,9 +76,7 @@ def scrape_results_page():
     driver = None
     try:
         driver = webdriver.Chrome(service=service, options=options)
-        # --- NEW URL ---
         driver.get("https://www.vlr.gg/matches/results")
-        # ---------------
         WebDriverWait(driver, 15).until(EC.presence_of_element_located((By.CSS_SELECTOR, "a.match-item")))
         page_source = driver.page_source
     except Exception as e:
@@ -90,7 +91,6 @@ def scrape_results_page():
     completed_match_urls = []
 
     for link in all_match_cards:
-        # We only need the URL from this page
         if 'href' in link.attrs:
             completed_match_urls.append("https://www.vlr.gg" + link['href'])
 
