@@ -162,29 +162,62 @@ def scrape_match_winner(match_url: str):
         response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
 
-        # Method 1: The most reliable way (if it exists)
+        # --- Method 1: The most reliable way (if it exists) ---
         winner_element = soup.select_one('div.match-header-vs-team.mod-win .wf-title-med')
         if winner_element:
             winner_name = winner_element.text.strip()
+            # This method is the gold standard, so we can trust it and return immediately.
             return winner_name
 
-        # Method 2: Fallback for pages that don't use 'mod-win'
+        # --- Method 2: The new, more robust fallback logic ---
         team_name_elements = soup.select('div.match-header-link-name .wf-title-med')
-        score_elements = soup.select(
-            'div.match-header-vs-score .js-spoiler span.match-header-vs-score-winner, div.match-header-vs-score .js-spoiler span.match-header-vs-score-loser')
 
-        if len(team_name_elements) < 2 or len(score_elements) < 2:
+        # This selector now specifically finds the container for the scores.
+        score_container = soup.select_one('div.match-header-vs-score .js-spoiler')
+
+        # Basic validation to ensure we have the elements we need
+        if not score_container or len(team_name_elements) < 2:
+            logging.warning(f"Could not find all necessary winner elements on {match_url}")
             return None
 
-        team1_name = team_name_elements[0].text.strip()
-        team2_name = team_name_elements[1].text.strip()
+        # Get the team names based on their visual position (left and right)
+        team1_name = team_name_elements[0].text.strip()  # Left team
+        team2_name = team_name_elements[1].text.strip()  # Right team
 
-        score1_classes = score_elements[0].get('class', [])
+        # Get all spans directly inside the score container to preserve their order
+        all_spans_in_order = score_container.find_all('span', recursive=False)
 
-        if 'match-header-vs-score-winner' in score1_classes:
+        # Filter out the middle ':' span to get only the two score spans
+        actual_score_spans = [s for s in all_spans_in_order if 'colon' not in s.get('class', [])]
+
+        if len(actual_score_spans) < 2:
+            logging.warning(f"Could not find two score spans on {match_url}")
+            return None
+
+        score1_span = actual_score_spans[0]  # Left score
+        score2_span = actual_score_spans[1]  # Right score
+
+        # Now we perform the unambiguous check
+        if 'match-header-vs-score-winner' in score1_span.get('class', []):
+            # If the left score has the 'winner' class, the left team won.
             return team1_name
-        else:  # If the first team isn't the winner, the second must be.
+
+        if 'match-header-vs-score-winner' in score2_span.get('class', []):
+            # If the right score has the 'winner' class, the right team won.
             return team2_name
+
+        # As a final check, if we can't find a winner, maybe we can find a loser
+        if 'match-header-vs-score-loser' in score2_span.get('class', []):
+            # If the right team lost, the left team must have won.
+            return team1_name
+
+        if 'match-header-vs-score-loser' in score1_span.get('class', []):
+            # If the left team lost, the right team must have won.
+            return team2_name
+
+        # If we reach this point, we could not determine a winner.
+        logging.error(f"Could not determine a winner on {match_url} using fallback logic.")
+        return None
 
     except Exception as e:
         logging.error(f"An unexpected error occurred while scraping winner from {match_url}: {e}")

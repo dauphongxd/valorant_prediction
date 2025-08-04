@@ -52,7 +52,7 @@
     "embed_description": "## ⚔️ **{user_team_a}** vs **{user_team_b}**",
     "overall_prediction_title": "🏆 Dự Đoán Tổng Hợp (Trung Bình Có Trọng Số)",
     "overall_prediction_value": "**Đội Dự Đoán Thắng: `{winner}`**\nĐộ Tin Cậy: `{winner_prob:.2%}`",
-    "model_header_model": "Mô Hình",
+    "model_header_model": "Chuyên Gia",
     "model_header_winner": "Đội Thắng",
     "model_header_confidence": "Độ Tin Cậy",
     "tier_standard_title": "Ascendant",
