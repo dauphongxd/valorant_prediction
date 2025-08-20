@@ -2,8 +2,16 @@
 __pycache__/
 *.pyc
 
-# Environment
-# .env
-
 # Other
 /venv/
+
+# Ignore large datasets
+data_collections/
+*.csv
+
+# Ignore large model files
+*.joblib
+*.pkl
+
+# Ignore environment files
+.env
