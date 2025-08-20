@@ -2,7 +2,6 @@
 
 Valorant Prophet is a sophisticated, multi-functional Discord bot designed for Valorant esports enthusiasts. It leverages a suite of machine learning models to predict match outcomes, integrates real-time odds from vlr.gg for a virtual betting system, and supports a multi-language user experience.
 
-![Valorant Prophet Bot in Action](https://imgur.com/a/8BJCvBG)
 ## ✨ Key Features
 
 *   **🧠 Advanced Match Prediction:** Utilizes an ensemble of 8 different machine learning models (from Logistic Regression to TabNet and TabTransformer) to provide nuanced and accurate predictions for match outcomes.
@@ -55,8 +54,8 @@ To run your own instance of the Valorant Prophet bot, follow these steps:
 
 **1. Clone the Repository**
 ```bash
-git clone <your-repo-url>
-cd <your-repo-directory>
+git clone https://github.com/dauphongxd/valorant_prediction.git
+cd valorant_prediction/
 ```
 
 **2. Create a `requirements.txt` file**
