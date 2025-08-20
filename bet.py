@@ -48,18 +48,47 @@ def scrape_upcoming_matches_list():
     for link in all_match_cards:
         if len(link.find_all('div', class_='match-item-vs-team-name')) < 2:
             continue
+
+        # --- FINAL, MORE PRECISE SCRAPING LOGIC ---
+        best_of_format = 'N/A'
+        # This selector specifically targets the divs that contain the time AND the format.
+        note_elements = link.select('.match-item-details-note')
+
+        for note in note_elements:
+            note_text = note.text.strip().lower()
+            if 'bo3' in note_text:
+                best_of_format = 'Bo3'
+                break
+            elif 'bo5' in note_text:
+                best_of_format = 'Bo5'
+                break
+            elif 'bo1' in note_text:
+                best_of_format = 'Bo1'
+                break
+        # --- END OF FINAL LOGIC ---
+
         team1 = link.find_all('div', class_='match-item-vs-team-name')[0].text.strip()
         team2 = link.find_all('div', class_='match-item-vs-team-name')[1].text.strip()
+
+        # --- NEW CHECK FOR TBD ---
+        if team1.lower() == 'tbd' or team2.lower() == 'tbd':
+            logging.info(f"Skipping match with TBD opponent: {team1} vs {team2}")
+            continue
+        # --- END NEW CHECK ---
+
         match_time = link.find('div', class_='match-item-time').text.strip()
         status = link.find('div', class_='ml-status').text.strip()
         url = "https://www.vlr.gg" + link['href']
+
         scraped_matches.append({
             'team1_name': team1,
             'team2_name': team2,
             'match_time': match_time,
             'status': status,
-            'vlr_url': url
+            'vlr_url': url,
+            'best_of_format': best_of_format
         })
+
     return scraped_matches
 
 
@@ -99,14 +128,22 @@ def scrape_results_page():
 
 def scrape_match_page_odds(match_url: str):
     """
-    Scrapes odds using a simple, robust positional method. It assumes the
-    left-side odds on a card belong to the left-side team in the header.
-    This eliminates all fragile name-matching logic.
+    Scrapes odds from a match page. Returns an empty list if the match is
+    already completed or if no valid odds are found.
+    This version is robust against finished-match pages and bet history cards.
     """
     try:
         response = requests.get(match_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=15)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
+
+        # --- FIX #1: HIGH-LEVEL CHECK ---
+        # If a winner element exists on the page, the match is over.
+        # There are no valid odds to scrape, so we return an empty list immediately.
+        if soup.select_one('div.match-header-vs-team.mod-win'):
+            logging.info(f"Match at {match_url} has already finished. Skipping odds check.")
+            return []
+        # --- END FIX #1 ---
 
         betting_cards = soup.find_all('a', class_='match-bet-item')
         if not betting_cards:
@@ -115,14 +152,22 @@ def scrape_match_page_odds(match_url: str):
         all_odds_data = []
         for card in betting_cards:
             try:
-                # --- THIS IS THE NEW, SIMPLIFIED LOGIC ---
+                # --- FIX #2: DEFENSIVE CHECK IN LOOP ---
+                # Bet history cards contain the word "returned". We must skip them.
+                if 'returned' in card.get_text(separator=" ", strip=True):
+                    continue
+                # --- END FIX #2 ---
+
                 odds_elements = card.select('.match-bet-item-odds')
                 if len(odds_elements) != 2:
                     continue
 
-                # Trust the visual order: odds[0] is for team1, odds[1] is for team2.
-                team1_odds = float(odds_elements[0].text.strip())
-                team2_odds = float(odds_elements[1].text.strip())
+                # This handles any other weird text, though the checks above should prevent it.
+                odds_text_t1 = odds_elements[0].text.strip().replace('$', '')
+                odds_text_t2 = odds_elements[1].text.strip().replace('$', '')
+
+                team1_odds = float(odds_text_t1)
+                team2_odds = float(odds_text_t2)
 
                 img_tag = card.select_one('img')
                 bookmaker = img_tag.get('alt', 'Unknown Bookmaker') if img_tag else 'Unknown Bookmaker'
@@ -132,9 +177,8 @@ def scrape_match_page_odds(match_url: str):
                     'team1_odds': team1_odds,
                     'team2_odds': team2_odds
                 })
-                # ---------------------------------------------
-            except Exception as e:
-                logging.warning(f"Skipping a card on {match_url} due to parsing error: {e}")
+            except (ValueError, IndexError) as e:
+                logging.warning(f"Skipping an invalid odds/bet card on {match_url}: {e}")
                 continue
 
         return all_odds_data
@@ -142,10 +186,10 @@ def scrape_match_page_odds(match_url: str):
     except requests.exceptions.HTTPError as e:
         if e.response.status_code == 404:
             logging.warning(f"Match page not found (404) for {match_url}. It may have been canceled.")
-            return "404_NOT_FOUND"  # Return our special signal
+            return "404_NOT_FOUND"
         else:
             logging.error(f"HTTP error when scraping {match_url}: {e}")
-            return None  # Return None for other HTTP errors (e.g., 503)
+            return None
 
     except Exception as e:
         logging.error(f"Failed to scrape specific match page {match_url}: {e}")

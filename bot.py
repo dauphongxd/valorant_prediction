@@ -1,15 +1,24 @@
 import os
-import discord
+import asyncio
+import logging  # <-- Standard library imports first
+import json
+from typing import List
+import datetime
+
+# --- SETUP LOGGING ---
+# This MUST be the first thing after standard library imports.
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+import discord  # <-- Third-party imports next
 from discord import app_commands, ui
 from discord.ext import tasks
 from dotenv import load_dotenv
 from tabulate import tabulate
-import asyncio
-import logging
-from typing import List
-import json
-from localization import translator
-import datetime
+
+from localization import translator # <-- Your local/project imports last
+
+# --- Setup Logging ---
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # --- Custom Module Imports ---
 from bet import (
@@ -22,8 +31,6 @@ from bet import (
 from main import run_all_models, normalize_team_name as normalize_model_team_name, MODEL_VERSION
 import database
 
-# --- Setup Logging ---
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # --- Ensure the script's working directory is correct ---
 base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -144,6 +151,19 @@ class BettingModal(ui.Modal):  # <-- Remove the static title from here
             embed.set_footer(
                 text=translator.get_string("betting_modal.new_balance_footer", user_locale, new_balance=new_balance))
             await interaction.response.send_message(embed=embed, ephemeral=True)
+
+        except ValueError as e:
+            if "Insufficient funds" in str(e):
+                # Re-fetch the absolute latest balance to show the user
+                final_account = await get_user_account(str(interaction.user.id), str(interaction.user))
+                await interaction.response.send_message(
+                    translator.get_string("betting_modal.insufficient_funds_error", user_locale,
+                                          balance=final_account['balance']),
+                    ephemeral=True)
+            else:
+                # Handle other potential ValueErrors, like from bad input
+                await interaction.response.send_message(
+                    translator.get_string("betting_modal.invalid_amount_error", user_locale), ephemeral=True)
 
         except Exception as e:
             logging.error(f"Error during bet submission for {interaction.user}: {e}")
@@ -314,7 +334,100 @@ async def update_matches_cache():
 
         await asyncio.sleep(2)
 
+    logging.info("[PROACTIVE TASK] Checking for matches that need predictions.")
+    matches_to_predict = await loop.run_in_executor(None, database.get_matches_for_proactive_prediction, MODEL_VERSION)
+    if not matches_to_predict:
+        logging.info("[PROACTIVE TASK] All upcoming matches have predictions.")
+    else:
+        logging.info(f"[PROACTIVE TASK] Found {len(matches_to_predict)} new matches to analyze.")
+        for match in matches_to_predict:
+            team_a = normalize_model_team_name(match['team1_name'])
+            team_b = normalize_model_team_name(match['team2_name'])
+            match_url = match['vlr_url']
+            scraped_format = match.get('best_of_format', 'N/A')
+
+            if not team_a or not team_b:
+                logging.warning(f"[PROACTIVE TASK] Could not normalize team names for {match_url}. Skipping.")
+                continue
+
+            # --- NEW DIAGNOSTIC LOGGING ---
+            logging.info("--- [PROACTIVE CHECK] ---")
+            logging.info(f"  > Match URL: {match_url}")
+            logging.info(f"  > Scraped Format from DB: '{scraped_format}' (Type: {type(scraped_format)})")
+            # --- END LOGGING -
+
+            # --- CORE FALLBACK LOGIC ---
+            # Ideal Case: The format was scraped successfully.
+            if scraped_format and scraped_format != 'N/A':
+                logging.info(f"  > Decision: Format is VALID. Running ONE prediction for {scraped_format}.")
+                logging.info(f"[PROACTIVE TASK] Analyzing {team_a} vs {team_b} for specific format: {scraped_format}.")
+                try:
+                    # Run models just once for the specific format
+                    results = await loop.run_in_executor(None, run_all_models, team_a, team_b, scraped_format)
+
+                    # (This aggregation logic is the same)
+                    tier_weights = {'⭐': 1.0, '⭐⭐': 1.5, '⭐⭐⭐': 2.0}
+                    total_weighted_prob, total_weight = 0, 0
+                    for res in results:
+                        if res['prob_a_wins'] is not None:
+                            weight = tier_weights.get(res['tier'], 1.0)
+                            total_weighted_prob += res['prob_a_wins'] * weight
+                            total_weight += weight
+
+                    if total_weight > 0:
+                        avg_prob = total_weighted_prob / total_weight
+                        winner = team_a if avg_prob > 0.5 else team_b
+                        winner_prob = avg_prob if winner == team_a else 1 - avg_prob
+                        await loop.run_in_executor(
+                            None, database.save_proactive_prediction, match_url, scraped_format, MODEL_VERSION, winner,
+                            winner_prob, team_a, team_b, results
+                        )
+                        logging.info(f"  > Saved proactive prediction for {match_url} ({scraped_format}).")
+                    else:
+                        logging.warning(f"  > All models failed for {match_url}. Cannot save prediction.")
+                except Exception as e:
+                    logging.error(f"[PROACTIVE TASK] An error occurred running models for {match_url}: {e}")
+
+            # Fallback Case: The format is 'N/A', so we run all three.
+            else:
+                logging.info(f"  > Decision: Format is INVALID or 'N/A'. Triggering FALLBACK for Bo3")
+                for best_of in ['Bo3']:
+                    try:
+                        results = await loop.run_in_executor(None, run_all_models, team_a, team_b, best_of)
+
+                        tier_weights = {'⭐': 1.0, '⭐⭐': 1.5, '⭐⭐⭐': 2.0}
+                        total_weighted_prob, total_weight = 0, 0
+                        for res in results:
+                            if res['prob_a_wins'] is not None:
+                                weight = tier_weights.get(res['tier'], 1.0)
+                                total_weighted_prob += res['prob_a_wins'] * weight
+                                total_weight += weight
+
+                        if total_weight > 0:
+                            avg_prob = total_weighted_prob / total_weight
+                            winner = team_a if avg_prob > 0.5 else team_b
+                            winner_prob = avg_prob if winner == team_a else 1 - avg_prob
+                            await loop.run_in_executor(
+                                None, database.save_proactive_prediction, match_url, best_of, MODEL_VERSION, winner,
+                                winner_prob, team_a, team_b, results
+                            )
+                            logging.info(f"  > Saved fallback prediction for {best_of} format.")
+                        else:
+                            logging.warning(f"  > All models failed for {best_of} format. Cannot save prediction.")
+
+                        await asyncio.sleep(5)  # Polite wait between formats
+                    except Exception as e:
+                        logging.error(
+                            f"[PROACTIVE TASK] An error occurred in fallback for {team_a} vs {team_b} ({best_of}): {e}")
+
+            await asyncio.sleep(10)  # Polite wait between matches
+
+
+    logging.info("[CACHE TASK] Performing database cleanup for stale matches.")
+    await loop.run_in_executor(None, database.remove_stale_upcoming_matches, 5) # Clean matches older than 5 days
+
     logging.info("[CACHE TASK] Update cycle finished.")
+
 
 
 @client.event
@@ -440,7 +553,7 @@ async def on_guild_join(guild: discord.Guild):
     # --- NEW: Create the text for the support link ---
     support_link_text = (
         f'Join Support Server:\n'
-        "https://discord.gg/cUKM9HMb"
+        "https://discord.gg/J76HkBDP2U"
     )
 
     # --- Send the messages as a DM ---
@@ -462,9 +575,11 @@ async def on_guild_join(guild: discord.Guild):
 @app_commands.describe(
     team_a="Name of Team A (e.g., Cloud9 or C9)",
     team_b="Name of Team B (e.g., Sentinels or SEN)",
-    best_of="The format of the match (Bo1, Bo3, or Bo5)"
+    best_of="The format of the match (e.g., Best of 3)"
 )
 @app_commands.choices(best_of=[
+    # The 'name' is what the user sees, the 'value' is what the bot gets.
+    # The 'value' now matches our standard format.
     app_commands.Choice(name="Best of 1", value="Bo1"),
     app_commands.Choice(name="Best of 3", value="Bo3"),
     app_commands.Choice(name="Best of 5", value="Bo5"),
@@ -486,49 +601,113 @@ async def predict_command(interaction: discord.Interaction, team_a: str, team_b:
         await interaction.followup.send(error_msg)
         return
 
-    # This dictionary now directly uses your globally defined emoji strings.
-    # It no longer needs to search the server.
-    tier_icons = {
-        '⭐': ASCENDANT_EMOJI,
-        '⭐⭐': IMMORTAL_EMOJI,
-        '⭐⭐⭐': RADIANT_EMOJI
-    }
-
+    tier_icons = {'⭐': ASCENDANT_EMOJI, '⭐⭐': IMMORTAL_EMOJI, '⭐⭐⭐': RADIANT_EMOJI}
     loop = asyncio.get_running_loop()
-    await loop.run_in_executor(None, database.update_prediction_count, str(interaction.user.id))
 
-    # The rest of this function is now correct and will work globally.
+    # --- NEW: Step 1 - Try to find a pre-calculated prediction ---
+    proactive_prediction = None
+    match_for_pred = await loop.run_in_executor(None, database.find_upcoming_match_by_teams, user_team_a, user_team_b)
+
+    if match_for_pred:
+        logging.info(f"Found upcoming match {match_for_pred['vlr_url']} for prediction. Checking proactive cache.")
+        proactive_prediction = await loop.run_in_executor(
+            None, database.get_proactive_prediction, match_for_pred['vlr_url'], best_of.value, MODEL_VERSION
+        )
+
+    if proactive_prediction:
+        logging.info(f"PROACTIVE cache hit for {user_team_a} vs {user_team_b}. Serving from database.")
+        await loop.run_in_executor(None, database.update_prediction_count, str(interaction.user.id))
+
+        results = json.loads(proactive_prediction['results_json'])
+
+        # The winner and their win probability are stored authoritatively in the database.
+        # We should use them directly for the final result, not recalculate them.
+        winner = proactive_prediction['winner']
+        winner_prob = proactive_prediction['winner_prob']
+
+        # We only need to adjust the individual model results for the display table if the user's
+        # team order is different from the order that was used when the prediction was stored.
+        if user_team_a != proactive_prediction['team_a']:
+            for res in results:
+                if res['prob_a_wins'] is not None:
+                    # Flip the probability because the user's perspective of Team A is different.
+                    res['prob_a_wins'] = 1.0 - res['prob_a_wins']
+
+        # 'winner' and 'winner_prob' now hold the correct, authoritative values,
+        # and 'results' is adjusted correctly for the display table.
+        # The rest of the embed building logic can now proceed without issue.
+
+        successful_models_count = sum(1 for res in results if res['prob_a_wins'] is not None)
+
+        embed = discord.Embed(title=translator.get_string("predict_command.embed_title", user_locale),
+                              description=translator.get_string("predict_command.embed_description", user_locale,
+                                                                user_team_a=user_team_a, user_team_b=user_team_b),
+                              color=discord.Color.blue())
+        embed.add_field(name=translator.get_string("predict_command.overall_prediction_title", user_locale),
+                        value=translator.get_string("predict_command.overall_prediction_value", user_locale,
+                                                    winner=winner, winner_prob=winner_prob), inline=False)
+        headers = [translator.get_string("predict_command.model_header_model", user_locale),
+                   translator.get_string("predict_command.model_header_winner", user_locale),
+                   translator.get_string("predict_command.model_header_confidence", user_locale)]
+        tier_titles = {'⭐': translator.get_string("predict_command.tier_standard_title", user_locale),
+                       '⭐⭐': translator.get_string("predict_command.tier_advanced_title", user_locale),
+                       '⭐⭐⭐': translator.get_string("predict_command.tier_deep_learning_title", user_locale)}
+
+        for tier, title in tier_titles.items():
+            tier_data = []
+            for res in results:
+                if res['tier'] == tier:
+                    if res['prob_a_wins'] is not None:
+                        model_winner = user_team_a if res['prob_a_wins'] >= 0.5 else user_team_b
+                        model_conf = f"{res['prob_a_wins'] if res['prob_a_wins'] >= 0.5 else 1 - res['prob_a_wins']:.2%}"
+                        tier_data.append([res['model'], model_winner, model_conf])
+                    else:
+                        tier_data.append(
+                            [res['model'], translator.get_string("predict_command.model_failed", user_locale),
+                             translator.get_string("predict_command.model_na", user_locale)])
+            if tier_data:
+                table_string = tabulate(tier_data, headers=headers, tablefmt="github")
+                embed.add_field(name=f"{tier_icons[tier]} {title}", value=f"```\n{table_string}\n```", inline=False)
+
+        embed.set_footer(text=f"⚡ Instant prediction from proactive analysis (Model v{MODEL_VERSION}).")
+        await interaction.followup.send(embed=embed)
+        return
+    # --- END of proactive prediction logic ---
+
+    # --- Fallback: Step 2 - Check the user-request cache (original behavior) ---
+    await loop.run_in_executor(None, database.update_prediction_count, str(interaction.user.id))
     cached_prediction = await loop.run_in_executor(
         None, database.get_cached_prediction, user_team_a, user_team_b, best_of.value, MODEL_VERSION
     )
 
     if cached_prediction:
-        logging.info(f"Cache hit for {user_team_a} vs {user_team_b}. Serving from database.")
+        logging.info(f"USER cache hit for {user_team_a} vs {user_team_b}. Serving from database.")
         results = json.loads(cached_prediction['results_json'])
+        # Adjust probabilities if user input is swapped vs stored
         if user_team_a != cached_prediction['team_a']:
             for res in results:
                 if res['prob_a_wins'] is not None:
                     res['prob_a_wins'] = 1.0 - res['prob_a_wins']
 
+        # Recalculate the aggregate winner based on the possibly swapped results
         tier_weights = {'⭐': 1.0, '⭐⭐': 1.5, '⭐⭐⭐': 2.0}
-        total_weighted_prob, total_weight, successful_models_count = 0, 0, 0
+        total_weighted_prob, total_weight = 0, 0
         for res in results:
             if res['prob_a_wins'] is not None:
                 weight = tier_weights.get(res['tier'], 1.0)
                 total_weighted_prob += res['prob_a_wins'] * weight
                 total_weight += weight
-                successful_models_count += 1
 
-        if total_weight == 0:
-            embed = discord.Embed(title=translator.get_string("predict_command.prediction_failed_title", user_locale),
-                                  description=translator.get_string("predict_command.prediction_failed_desc",
-                                                                    user_locale), color=discord.Color.red())
-            await interaction.followup.send(embed=embed)
-            return
+        if total_weight > 0:
+            avg_prob = total_weighted_prob / total_weight
+            winner = user_team_a if avg_prob > 0.5 else user_team_b
+            winner_prob = avg_prob if winner == user_team_a else 1 - avg_prob
+        else:  # Should not happen if there is a cached prediction, but as a safe guard
+            winner = "N/A"
+            winner_prob = 0
 
-        avg_prob = total_weighted_prob / total_weight
-        winner = user_team_a if avg_prob > 0.5 else user_team_b
-        winner_prob = avg_prob if winner == user_team_a else 1 - avg_prob
+        successful_models_count = cached_prediction['successful_models']
+        total_models = cached_prediction['total_models']
 
         embed = discord.Embed(title=translator.get_string("predict_command.embed_title", user_locale),
                               description=translator.get_string("predict_command.embed_description", user_locale,
@@ -561,12 +740,14 @@ async def predict_command(interaction: discord.Interaction, team_a: str, team_b:
                 embed.add_field(name=f"{tier_icons[tier]} {title}", value=f"```\n{table_string}\n```", inline=False)
 
         embed.set_footer(
-            text=f"Result from cache (Model Version: {MODEL_VERSION}). Aggregated from {successful_models_count}/{len(results)} successful models.")
+            text=f"Result from request cache (Model v{MODEL_VERSION}). Aggregated from {successful_models_count}/{total_models} models.")
         await interaction.followup.send(embed=embed)
         return
 
-    logging.info(f"Cache miss for {user_team_a} vs {user_team_b}. Running models.")
+    # --- Fallback: Step 3 - Run models on-demand (original behavior) ---
+    logging.info(f"NO cache hit for {user_team_a} vs {user_team_b}. Running models on-demand.")
     results = run_all_models(user_team_a, user_team_b, best_of.value)
+
     tier_weights = {'⭐': 1.0, '⭐⭐': 1.5, '⭐⭐⭐': 2.0}
     total_weighted_prob, total_weight, successful_models_count = 0, 0, 0
     for res in results:
@@ -587,8 +768,10 @@ async def predict_command(interaction: discord.Interaction, team_a: str, team_b:
     winner = user_team_a if avg_prob > 0.5 else user_team_b
     winner_prob = avg_prob if winner == user_team_a else 1 - avg_prob
 
+    # Save to the user-request cache for next time
     await loop.run_in_executor(None, database.save_prediction, user_team_a, user_team_b, best_of.value, MODEL_VERSION,
                                winner, winner_prob, successful_models_count, len(results), results)
+
     embed = discord.Embed(title=translator.get_string("predict_command.embed_title", user_locale),
                           description=translator.get_string("predict_command.embed_description", user_locale,
                                                             user_team_a=user_team_a, user_team_b=user_team_b),

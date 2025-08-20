@@ -46,16 +46,49 @@ def initialize_database():
     # --- MODIFIED 'matches' TABLE ---
     # We add two new columns to store search-friendly names.
     cursor.execute('''
-    CREATE TABLE IF NOT EXISTS matches (
-        vlr_url TEXT PRIMARY KEY,
-        team1_name TEXT NOT NULL,
-        team2_name TEXT NOT NULL,
-        norm_team1_name TEXT NOT NULL,
-        norm_team2_name TEXT NOT NULL,
-        match_time TEXT NOT NULL,
-        status TEXT NOT NULL,
-        last_odds_update TIMESTAMP
-    )''')
+                   CREATE TABLE IF NOT EXISTS matches
+                   (
+                       vlr_url
+                       TEXT
+                       PRIMARY
+                       KEY,
+                       team1_name
+                       TEXT
+                       NOT
+                       NULL,
+                       team2_name
+                       TEXT
+                       NOT
+                       NULL,
+                       norm_team1_name
+                       TEXT
+                       NOT
+                       NULL,
+                       norm_team2_name
+                       TEXT
+                       NOT
+                       NULL,
+                       match_time
+                       TEXT
+                       NOT
+                       NULL,
+                       status
+                       TEXT
+                       NOT
+                       NULL,
+                       best_of_format
+                       TEXT
+                       NOT
+                       NULL
+                       DEFAULT
+                       'N/A',
+                       last_odds_update
+                       TIMESTAMP,
+                       first_seen_at
+                       TIMESTAMP
+                       DEFAULT
+                       CURRENT_TIMESTAMP -- <-- ADD THIS LINE
+                   )''')
     # --- END MODIFICATION ---
 
     # (odds and predictions tables are unchanged)
@@ -71,6 +104,63 @@ def initialize_database():
                     successful_models INTEGER NOT NULL, total_models INTEGER NOT NULL, results_json TEXT NOT NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE (team_a, team_b, best_of, model_version))''')
+
+    # This table stores pre-calculated predictions for upcoming matches.
+    cursor.execute('''
+                   CREATE TABLE IF NOT EXISTS proactive_predictions
+                   (
+                       match_url
+                       TEXT
+                       NOT
+                       NULL,
+                       best_of
+                       TEXT
+                       NOT
+                       NULL,
+                       model_version
+                       TEXT
+                       NOT
+                       NULL,
+                       winner
+                       TEXT
+                       NOT
+                       NULL,
+                       winner_prob
+                       REAL
+                       NOT
+                       NULL,
+                       team_a
+                       TEXT
+                       NOT
+                       NULL,
+                       team_b
+                       TEXT
+                       NOT
+                       NULL,
+                       results_json
+                       TEXT
+                       NOT
+                       NULL,
+                       created_at
+                       TIMESTAMP
+                       DEFAULT
+                       CURRENT_TIMESTAMP,
+                       PRIMARY
+                       KEY
+                   (
+                       match_url,
+                       best_of,
+                       model_version
+                   ),
+                       FOREIGN KEY
+                   (
+                       match_url
+                   ) REFERENCES matches
+                   (
+                       vlr_url
+                   ) ON DELETE CASCADE
+                       )
+                   ''')
 
     conn.commit()
     conn.close()
@@ -105,21 +195,39 @@ def get_user_account(user_id: str, username: str, guild_id: str = None):
     conn.close()
     return user
 
+
 def place_bet(user_id: str, guild_id: str, match_id: str, team_bet_on: str, opponent: str, amount: float, odds: float):
     conn = sqlite3.connect(DATABASE_FILE)
     cursor = conn.cursor()
     try:
+        # --- WRAP IN A TRANSACTION ---
+        cursor.execute("BEGIN TRANSACTION")
+
+        # First, check if the user STILL has enough money right before deducting
+        cursor.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
+        current_balance = cursor.fetchone()[0]
+
+        if amount > current_balance:
+            # Not enough money, so we abort the transaction.
+            conn.rollback()
+            # We can raise a custom error or just return a signal
+            raise ValueError(f"Insufficient funds for user {user_id}.")
+
+        # If they have enough, proceed.
         cursor.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (amount, user_id))
         cursor.execute('''
                        INSERT INTO bets (user_id, guild_id, match_id, team_bet_on, opponent, amount, odds)
                        VALUES (?, ?, ?, ?, ?, ?, ?)
                        ''', (user_id, guild_id, match_id, team_bet_on, opponent, amount, odds))
+
+        # If both succeed, commit the changes.
         conn.commit()
         logging.info(f"Successfully placed bet for user {user_id} on match {match_id}")
+
     except Exception as e:
-        conn.rollback()
+        conn.rollback()  # Rollback on ANY error
         logging.error(f"Failed to place bet for user {user_id}: {e}")
-        raise
+        raise  # Re-raise the exception so the bot can handle it
     finally:
         conn.close()
 
@@ -146,27 +254,57 @@ def upsert_matches(match_list: list):
     conn = sqlite3.connect(DATABASE_FILE)
     cursor = conn.cursor()
     for match in match_list:
-        # --- MODIFICATION ---
-        # Normalize the names before inserting/updating
         norm_t1 = normalize_for_search(match['team1_name'])
         norm_t2 = normalize_for_search(match['team2_name'])
 
+        # --- START MODIFICATION ---
         cursor.execute('''
-                       INSERT INTO matches (vlr_url, team1_name, team2_name, norm_team1_name, norm_team2_name, match_time, status)
-                       VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(vlr_url) DO
+                       INSERT INTO matches (vlr_url, team1_name, team2_name, norm_team1_name, norm_team2_name,
+                                            match_time, status, best_of_format)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(vlr_url) DO
                        UPDATE SET
                            match_time = excluded.match_time,
                            status = excluded.status,
-                           -- Also update the normalized names in case a team name changes
+                           best_of_format = excluded.best_of_format, -- Add this line
                            norm_team1_name = excluded.norm_team1_name,
                            norm_team2_name = excluded.norm_team2_name
                        ''', (match['vlr_url'], match['team1_name'], match['team2_name'],
-                             norm_t1, norm_t2, # Add the new values
-                             match['match_time'], match['status']))
+                             norm_t1, norm_t2,
+                             match['match_time'], match['status'],
+                             match['best_of_format']))  # Add this value
         # --- END MODIFICATION ---
     conn.commit()
     conn.close()
     logging.info(f"Upserted {len(match_list)} matches into the database.")
+
+
+def remove_stale_upcoming_matches(days_old: int = 5):
+    """
+    Removes matches from the database that have been in the 'Upcoming'
+    status for more than a specified number of days.
+    """
+    conn = sqlite3.connect(DATABASE_FILE)
+    cursor = conn.cursor()
+    try:
+        # julianday('now') - julianday(first_seen_at) gives the difference in days
+        cursor.execute("""
+                       DELETE
+                       FROM matches
+                       WHERE status = 'Upcoming'
+                         AND (julianday('now') - julianday(first_seen_at)) > ?
+                       """, (days_old,))
+
+        removed_count = cursor.rowcount
+        conn.commit()
+        if removed_count > 0:
+            logging.info(f"[DB CLEANUP] Removed {removed_count} stale 'Upcoming' matches older than {days_old} days.")
+
+    except Exception as e:
+        conn.rollback()
+        logging.error(f"Failed to remove stale matches: {e}")
+    finally:
+        conn.close()
+
 
 
 def mark_matches_as_final(vlr_urls: list):
@@ -221,33 +359,34 @@ def update_match_odds(match_url: str, odds_data: list):
 
 def get_match_for_betting(team1_query: str, team2_query: str):
     """
-    Finds a match for betting by searching the pre-normalized name columns.
+    Finds a match for betting. This is now STRICTLY limited to matches
+    with the status 'Upcoming' to prevent betting on live or finished games.
     """
     conn = sqlite3.connect(DATABASE_FILE)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
 
-    # --- MODIFICATION ---
-    # Normalize the user's search query using the same function
     norm_t1_query = f"%{normalize_for_search(team1_query)}%"
     norm_t2_query = f"%{normalize_for_search(team2_query)}%"
 
-    # Search against the new 'norm_teamX_name' columns instead of the original names
-    # We no longer need the LOWER() function in SQL.
+    # --- THIS IS THE FIX ---
+    # We add "AND status = 'Upcoming'" to the query.
+    # This prevents the /bet command from ever finding a match that is LIVE or FINAL.
     cursor.execute('''
                    SELECT *
                    FROM matches
-                   WHERE (norm_team1_name LIKE ? AND norm_team2_name LIKE ?)
-                      OR (norm_team1_name LIKE ? AND norm_team2_name LIKE ?)
-                       AND status != 'COMPLETED' AND status != 'Final'
+                   WHERE ((norm_team1_name LIKE ? AND norm_team2_name LIKE ?)
+                      OR (norm_team1_name LIKE ? AND norm_team2_name LIKE ?))
+                       AND status = 'Upcoming'
                    ORDER BY last_odds_update DESC, match_time ASC LIMIT 1
                    ''', (norm_t1_query, norm_t2_query, norm_t2_query, norm_t1_query))
-    # --- END MODIFICATION ---
+    # --- END FIX ---
 
     match = cursor.fetchone()
     if not match:
         conn.close()
         return None, None
+
     cursor.execute("SELECT * FROM odds WHERE match_url = ?", (match['vlr_url'],))
     odds = cursor.fetchall()
     conn.close()
@@ -564,3 +703,87 @@ def get_leaderboard_for_guild(guild_id: str, limit: int = 10):
     finally:
         conn.close()
     return leaderboard_data
+
+def find_upcoming_match_by_teams(team_a: str, team_b: str):
+    """
+    Finds a single upcoming match given two team names.
+    This is used by the /predict command to link user input to a specific match.
+    """
+    conn = sqlite3.connect(DATABASE_FILE)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+
+    norm_t1_query = f"%{normalize_for_search(team_a)}%"
+    norm_t2_query = f"%{normalize_for_search(team_b)}%"
+
+    # Searches for a match where status is 'Upcoming'
+    cursor.execute('''
+        SELECT * FROM matches
+        WHERE ((norm_team1_name LIKE ? AND norm_team2_name LIKE ?) OR
+               (norm_team1_name LIKE ? AND norm_team2_name LIKE ?))
+        AND status = 'Upcoming'
+        ORDER BY match_time ASC
+        LIMIT 1
+    ''', (norm_t1_query, norm_t2_query, norm_t2_query, norm_t1_query))
+
+    match = cursor.fetchone()
+    conn.close()
+    return dict(match) if match else None
+
+def get_proactive_prediction(vlr_url: str, best_of: str, model_version: str):
+    """
+    Retrieves a pre-calculated prediction from the proactive_predictions table.
+    """
+    conn = sqlite3.connect(DATABASE_FILE)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT * FROM proactive_predictions
+        WHERE match_url = ? AND best_of = ? AND model_version = ?
+    ''', (vlr_url, best_of, model_version))
+    prediction = cursor.fetchone()
+    conn.close()
+    return dict(prediction) if prediction else None
+
+def get_matches_for_proactive_prediction(model_version: str):
+    """
+    Fetches all 'Upcoming' matches that have not yet had ANY prediction generated
+    for the current model version. This allows the bot to handle both matches
+    with known and unknown formats.
+    """
+    conn = sqlite3.connect(DATABASE_FILE)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    # This query now finds any match that has no entry in proactive_predictions for this model version.
+    # This correctly identifies matches that need processing, regardless of their format status.
+    cursor.execute('''
+        SELECT m.*
+        FROM matches m
+        LEFT JOIN proactive_predictions pp ON m.vlr_url = pp.match_url AND pp.model_version = ?
+        WHERE m.status = 'Upcoming' AND pp.match_url IS NULL
+    ''', (model_version,))
+    matches = cursor.fetchall()
+    conn.close()
+    return [dict(m) for m in matches]
+
+def save_proactive_prediction(match_url: str, best_of: str, model_version: str, winner: str, winner_prob: float, team_a: str, team_b: str, results: list):
+    """Saves a new pre-calculated prediction to the database."""
+    conn = sqlite3.connect(DATABASE_FILE)
+    cursor = conn.cursor()
+    results_json = json.dumps(results, cls=NumpyFloatJSONEncoder)
+    try:
+        cursor.execute('''
+            INSERT INTO proactive_predictions (match_url, best_of, model_version, winner, winner_prob, team_a, team_b, results_json, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(match_url, best_of, model_version) DO UPDATE SET
+                winner=excluded.winner,
+                winner_prob=excluded.winner_prob,
+                results_json=excluded.results_json,
+                created_at=excluded.created_at
+        ''', (match_url, best_of, model_version, winner, winner_prob, team_a, team_b, results_json, datetime.now()))
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        logging.error(f"Failed to save proactive prediction for {match_url} ({best_of}): {e}")
+    finally:
+        conn.close()

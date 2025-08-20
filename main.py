@@ -8,6 +8,21 @@ import logging
 MODEL_VERSION = "1.1"
 
 
+def load_valid_teams(filepath: str) -> set:
+    """Loads the list of valid team names from a JSON file into a set."""
+    if not os.path.exists(filepath):
+        logging.critical(f"FATAL ERROR: Valid teams file not found at '{filepath}'.")
+        sys.exit(1)
+    try:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            teams = json.load(f)
+        logging.info(f"Successfully loaded {len(teams)} valid teams for model validation.")
+        return set(teams)
+    except Exception as e:
+        logging.critical(f"FATAL ERROR: Failed to load or parse valid teams file '{filepath}': {e}")
+        sys.exit(1)
+
+
 # --- NEW: Function to load team mappings from your JSON file ---
 def load_team_mappings(filepath: str) -> Tuple[Dict[str, str], Dict[str, str]]:
     """
@@ -51,9 +66,19 @@ def load_team_mappings(filepath: str) -> Tuple[Dict[str, str], Dict[str, str]]:
     return team_map, reverse_team_map
 
 
-# --- CONFIGURATION: Load team names from the JSON file ---
-TEAM_DATA_FILE = 'vlr_team_short_names.json'
+# --- CONFIGURATION: Load team names AND valid teams ---
+try:
+    _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    TEAM_DATA_FILE = os.path.join(_BASE_DIR, 'shorten_team_name.json')
+    VALID_TEAMS_FILE = os.path.join(_BASE_DIR, 'valid_teams.json')
+except NameError:
+    TEAM_DATA_FILE = 'shorten_team_name.json'
+    VALID_TEAMS_FILE = 'valid_teams.json'
+
+
 TEAM_NAME_MAPPING, REVERSE_TEAM_MAPPING = load_team_mappings(TEAM_DATA_FILE)
+VALID_TEAMS = load_valid_teams(VALID_TEAMS_FILE)
+
 
 # --- CONFIGURATION: Define all models and their properties (Unchanged) ---
 MODELS_CONFIG = {
@@ -120,10 +145,30 @@ MODELS_CONFIG = {
 def normalize_team_name(name: str) -> Optional[str]:
     """
     Converts a team abbreviation or alternate name to its official, full name
-    using the loaded JSON data. Returns None if no mapping is found.
+    and validates that the name exists in the training data.
+    If the name is not valid, it returns None.
     """
     cleaned_name = name.strip().lower()
-    return REVERSE_TEAM_MAPPING.get(cleaned_name, None)
+
+    # Step 1: Find the full name using the reverse mapping
+    full_name = REVERSE_TEAM_MAPPING.get(cleaned_name)
+
+    # Step 2: If we found a full name, check if it's in our valid list
+    if full_name and full_name in VALID_TEAMS:
+        return full_name
+
+    # Step 3: If no mapping was found, maybe the user typed the full name directly
+    # We check if the original input (capitalized correctly, if possible) is valid.
+    # This is a bit tricky, so we'll just check if *any* valid team name matches the user's lowercased input.
+    # A more robust solution might be needed if you have similar names, but this is a good start.
+    if not full_name:
+        for valid_team in VALID_TEAMS:
+            if valid_team.lower() == cleaned_name:
+                return valid_team
+
+    # If we reach here, the team is not in our list of valid, trained teams.
+    logging.warning(f"Validation failed for team name: '{name}'. It is not in valid_teams.json.")
+    return None
 
 
 # --- MAIN PIPELINE LOGIC (Unchanged) ---
@@ -164,12 +209,12 @@ def run_all_models(team_a, team_b, best_of):
             all_predictions.append(result_payload)
 
             if prob_a_wins is not None:
-                print(f"  > Prediction complete: {team_a} win prob = {prob_a_wins:.2%}")
+                logging.info(f"  > Prediction complete: {team_a} win prob = {prob_a_wins:.2%}")
             else:
-                print(f"  > Prediction failed.")
+                logging.info(f"  > Prediction failed.")
 
         except Exception as e:
-            print(f"  > An unexpected error occurred while running {model_name}: {e}")
+            logging.error(f"  > An unexpected error occurred while running {model_name}: {e}")
             import traceback
             traceback.print_exc()
             all_predictions.append(result_payload)
