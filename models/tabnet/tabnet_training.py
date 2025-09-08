@@ -1,5 +1,3 @@
-# catboost_training.py
-
 import pandas as pd
 import numpy as np
 from pytorch_tabnet.tab_model import TabNetClassifier
@@ -11,17 +9,20 @@ import joblib
 import optuna
 import warnings
 import json
+import os  # --- Keep os to check for file existence
 
 warnings.filterwarnings('ignore')
 
 # --- CONFIGURATION ---
 DATA_FILE = 'ready.csv'
 ARTIFACTS_FILE = 'tabnet_optimized_artifacts.pkl'
+BEST_PARAMS_FILE = 'best_hyperparameters_tabnet.json'
 TIME_WEIGHT_HALF_LIFE_DAYS = 90
 N_SPLITS_K_FOLD = 5
 N_OPTUNA_TRIALS = 30
 
 
+# ... (The calculate_advanced_stats and create_feature_dataset functions are unchanged) ...
 def calculate_advanced_stats(df):
     """
     Calculates stats based on the TRUE historical timeline.
@@ -92,13 +93,16 @@ def create_feature_dataset(df, global_stats, map_stats, h2h_stats):
     return feature_df
 
 
-def main():
+# --- MODIFICATION: The main function now accepts a 'mode' string ---
+def main(mode):
     print("--- Optimized TabNet Training Pipeline ---")
+    run_mode = "LOADING FROM JSON" if mode == 'train' else "SEARCHING FOR NEW PARAMETERS"
+    print(f"--- Running in {run_mode} mode ---")
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f"Using device: {device.upper()}")
 
-    # --- CORRECTED LOGIC: STAGE 1 - Use ORIGINAL data for stats and features ---
+    # --- Data preparation (happens in both modes) ---
     df_original = pd.read_csv(DATA_FILE)
     df_original.drop(columns=['match_id', 'event_stage'], inplace=True, errors='ignore')
     global_stats, map_stats, h2h_stats = calculate_advanced_stats(df_original)
@@ -121,64 +125,76 @@ def main():
     cat_idxs = [X.columns.get_loc(col) for col in categorical_features]
     cat_dims = [len(le.classes_) for le in label_encoders.values()]
 
-    def objective(trial):
-        mask_type = trial.suggest_categorical("mask_type", ["entmax", "sparsemax"])
-        n_da = trial.suggest_int("n_da", 8, 32, step=4)
-        n_steps = trial.suggest_int("n_steps", 3, 7)
-        gamma = trial.suggest_float("gamma", 1.0, 2.0)
-        n_shared = trial.suggest_int("n_shared", 1, 3)
-        cat_emb_dim = trial.suggest_int("cat_emb_dim", 2, 8)
+    best_params = {}
 
-        tabnet_params = dict(
-            n_d=n_da, n_a=n_da, n_steps=n_steps, gamma=gamma,
-            cat_idxs=cat_idxs, cat_dims=cat_dims, cat_emb_dim=cat_emb_dim,
-            n_independent=2, n_shared=n_shared, mask_type=mask_type,
-            device_name='cuda', optimizer_fn=torch.optim.Adam,
-            optimizer_params=dict(lr=2e-2), scheduler_params={"step_size": 10, "gamma": 0.9},
-            scheduler_fn=torch.optim.lr_scheduler.StepLR, verbose=0
-        )
+    # --- Mode 'search': Run a new hyperparameter search ---
+    if mode == 'search':
+        print(f"\nStep 4: Starting Optuna hyperparameter search ({N_OPTUNA_TRIALS} trials)...")
 
-        kf = KFold(n_splits=N_SPLITS_K_FOLD, shuffle=True, random_state=42)
-        cv_scores = []
-        for i, (train_idx, val_idx) in enumerate(kf.split(X.values, y.values)):
-            X_train, y_train = X.values[train_idx], y.values[train_idx]
-            X_val, y_val = X.values[val_idx], y.values[val_idx]
+        def objective(trial):
+            mask_type = trial.suggest_categorical("mask_type", ["entmax", "sparsemax"])
+            n_da = trial.suggest_int("n_da", 8, 32, step=4)
+            n_steps = trial.suggest_int("n_steps", 3, 7)
+            gamma = trial.suggest_float("gamma", 1.0, 2.0)
+            n_shared = trial.suggest_int("n_shared", 1, 3)
+            cat_emb_dim = trial.suggest_int("cat_emb_dim", 2, 8)
 
-            model = TabNetClassifier(**tabnet_params)
-            model.fit(
-                X_train, y_train, eval_set=[(X_val, y_val)],
-                patience=10, max_epochs=75, eval_metric=['auc']  # Faster search
+            tabnet_params = dict(
+                n_d=n_da, n_a=n_da, n_steps=n_steps, gamma=gamma,
+                cat_idxs=cat_idxs, cat_dims=cat_dims, cat_emb_dim=cat_emb_dim,
+                n_independent=2, n_shared=n_shared, mask_type=mask_type,
+                device_name='cuda', optimizer_fn=torch.optim.Adam,
+                optimizer_params=dict(lr=2e-2), scheduler_params={"step_size": 10, "gamma": 0.9},
+                scheduler_fn=torch.optim.lr_scheduler.StepLR, verbose=0
             )
-            preds = model.predict_proba(X_val)[:, 1]
-            score = roc_auc_score(y_val, preds)
-            cv_scores.append(score)
 
-            trial.report(score, i)
-            if trial.should_prune():
-                raise optuna.exceptions.TrialPruned()
+            kf = KFold(n_splits=N_SPLITS_K_FOLD, shuffle=True, random_state=42)
+            cv_scores = []
+            for i, (train_idx, val_idx) in enumerate(kf.split(X.values, y.values)):
+                X_train, y_train = X.values[train_idx], y.values[train_idx]
+                X_val, y_val = X.values[val_idx], y.values[val_idx]
 
-        return np.mean(cv_scores)
+                model = TabNetClassifier(**tabnet_params)
+                model.fit(
+                    X_train, y_train, eval_set=[(X_val, y_val)],
+                    patience=10, max_epochs=75, eval_metric=['auc']
+                )
+                preds = model.predict_proba(X_val)[:, 1]
+                score = roc_auc_score(y_val, preds)
+                cv_scores.append(score)
 
-    study = optuna.create_study(direction="maximize", study_name="TabNet Optimization",
-                                pruner=optuna.pruners.MedianPruner())
-    study.optimize(objective, n_trials=N_OPTUNA_TRIALS)
+                trial.report(score, i)
+                if trial.should_prune():
+                    raise optuna.exceptions.TrialPruned()
 
-    print(f"Search complete. Best AUC: {study.best_value:.4f}")
-    print("Best hyperparameters:", study.best_params)
+            return np.mean(cv_scores)
 
-    # --- NEW: Save the best hyperparameters to a file ---
-    BEST_PARAMS_FILE = 'best_hyperparameters_tabnet.json'
-    results_to_save = {
-        "best_auc_in_search": study.best_value,
-        "best_hyperparameters": study.best_params
-    }
-    with open(BEST_PARAMS_FILE, 'w') as f:
-        json.dump(results_to_save, f, indent=4)
-    print(f"\n✅ Best hyperparameters saved to {BEST_PARAMS_FILE}")
-    # --- END NEW ---
+        study = optuna.create_study(direction="maximize", study_name="TabNet Optimization",
+                                    pruner=optuna.pruners.MedianPruner())
+        study.optimize(objective, n_trials=N_OPTUNA_TRIALS)
 
+        print(f"Search complete. Best AUC: {study.best_value:.4f}")
+        print("Best hyperparameters found:", study.best_params)
+
+        results_to_save = {
+            "best_auc_in_search": study.best_value,
+            "best_hyperparameters": study.best_params
+        }
+        with open(BEST_PARAMS_FILE, 'w') as f:
+            json.dump(results_to_save, f, indent=4)
+        print(f"\n✅ Best hyperparameters saved to {BEST_PARAMS_FILE}")
+        best_params = study.best_params
+
+    # --- Mode 'train': Load parameters from the JSON file ---
+    elif mode == 'train':
+        print(f"\nStep 4: Skipping search. Loading hyperparameters from {BEST_PARAMS_FILE}...")
+        with open(BEST_PARAMS_FILE, 'r') as f:
+            saved_results = json.load(f)
+        best_params = saved_results['best_hyperparameters']
+        print("Successfully loaded hyperparameters:", best_params)
+
+    # --- Final Training (happens in both modes) ---
     print("\nStep 5: Training final model with best hyperparameters on all data...")
-    best_params = study.best_params
     final_params = dict(
         n_d=best_params['n_da'], n_a=best_params['n_da'], n_steps=best_params['n_steps'],
         gamma=best_params['gamma'], cat_idxs=cat_idxs, cat_dims=cat_dims,
@@ -189,7 +205,7 @@ def main():
     )
 
     final_model = TabNetClassifier(**final_params)
-    final_model.fit(X.values, y.values, max_epochs=150, patience=20, batch_size=1024)  # Final training is thorough
+    final_model.fit(X.values, y.values, max_epochs=150, patience=20, batch_size=1024)
 
     print("\nStep 6: Saving final model and all artifacts...")
     artifacts = {
@@ -201,5 +217,33 @@ def main():
     print(f"Pipeline complete. Artifacts saved to {ARTIFACTS_FILE}")
 
 
+# --- MODIFICATION: This is the new interactive entry point ---
 if __name__ == '__main__':
-    main()
+    # Loop indefinitely until the user gives a valid input
+    while True:
+        print("\n--- TabNet Training Menu ---")
+        print("Please choose a mode to run the script in:")
+        print(f"  1: Train using existing '{BEST_PARAMS_FILE}' file.")
+        print("  2: Run a new hyperparameter search and overwrite the old file.")
+
+        choice = input("Enter your choice (1 or 2): ")
+
+        if choice == '1':
+            # Before setting the mode, check if the file actually exists
+            if not os.path.exists(BEST_PARAMS_FILE):
+                print(f"\n❌ ERROR: Cannot find '{BEST_PARAMS_FILE}'.")
+                print("Please run option 2 first to create the file.\n")
+                continue  # Ask for input again
+
+            run_mode = 'train'
+            break  # Exit the loop
+
+        elif choice == '2':
+            run_mode = 'search'
+            break  # Exit the loop
+
+        else:
+            print("\n❌ Invalid input. Please enter only '1' or '2'.\n")
+
+    # Call the main function with the chosen mode
+    main(run_mode)

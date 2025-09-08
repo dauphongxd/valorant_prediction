@@ -12,32 +12,25 @@ from torch.utils.data import DataLoader, TensorDataset
 import joblib
 import optuna
 import warnings
+import json  # --- NEW: Import json
+import os  # --- NEW: Import os to check for file existence
 
 warnings.filterwarnings('ignore')
 
 # --- CONFIGURATION ---
 DATA_FILE = 'ready.csv'
 ARTIFACTS_FILE = 'tabtransformer_optimized_artifacts.pkl'
+BEST_PARAMS_FILE = 'best_hyperparameters_transformer.json'  # --- NEW: Define filename
 TIME_WEIGHT_HALF_LIFE_DAYS = 90
 N_SPLITS_K_FOLD = 5
 N_OPTUNA_TRIALS = 30
-OPTUNA_MAX_EPOCHS = 75  # Reduced from 100
-OPTUNA_PATIENCE = 10    # Reduced from 15
-
-# --- Strategy 2: Fast Iteration ---
-# Good for quickly checking if the pipeline works or for rapid experimentation.
-# The result will be good, but maybe not the absolute best.
-# N_SPLITS_K_FOLD = 3
-# N_OPTUNA_TRIALS = 20
-# OPTUNA_MAX_EPOCHS = 50
-# OPTUNA_PATIENCE = 8
-# ---
+OPTUNA_MAX_EPOCHS = 75
+OPTUNA_PATIENCE = 10
 
 
-# --- HELPER WRAPPER CLASS FOR TRAINING ---
+# ... (TabTransformerWrapper class and data functions are unchanged) ...
 class TabTransformerWrapper:
     def __init__(self, **kwargs):
-        # We'll extract training-specific params and model-specific params
         self.patience = kwargs.pop('patience', 20)
         self.max_epochs = kwargs.pop('max_epochs', 150)
         self.batch_size = kwargs.pop('batch_size', 1024)
@@ -102,23 +95,13 @@ class TabTransformerWrapper:
         return np.hstack([1 - probs, probs])
 
 
-# --- The rest of the script is largely fine, but we must ensure the data order ---
-
 def calculate_advanced_stats(df):
-    """
-    Calculates time-weighted and head-to-head stats.
-    This version includes a fix for division-by-zero when calculating KDR.
-    """
     print("Step 1: Calculating advanced time-weighted statistics from original data...")
     df['match_date'] = pd.to_datetime(df['match_date'])
     if df['match_date'].duplicated().any():
         print("WARNING: Duplicate dates found, EWM stats may be incorrect if data was pre-augmented.")
-
-    # FIX for infinity values
     kdr_diff = df['kills_diff'] / df['deaths_diff'].abs()
     df['kdr_diff'] = kdr_diff.replace([np.inf, -np.inf], 0).fillna(0)
-
-    # --- END FIX ---
 
     def get_ewm_stats(sub_df):
         stat_cols = ['acs_diff', 'kdr_diff', 'assists_diff']
@@ -179,13 +162,23 @@ def create_feature_dataset(df, global_stats, map_stats, h2h_stats):
     return feature_df
 
 
-def main():
+# --- MODIFICATION: The main function now accepts a 'mode' string ---
+def main(mode):
     print("--- TabTransformer Training Pipeline ---")
+    run_mode = "LOADING FROM JSON" if mode == 'train' else "SEARCHING FOR NEW PARAMETERS"
+    print(f"--- Running in {run_mode} mode ---")
+
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f"Using device: {device.upper()}")
 
-    # Stages 1-3 are unchanged
+    # --- Data preparation (happens in both modes) ---
     df_original = pd.read_csv(DATA_FILE)
+    print("Ensuring chronological order for EWM calculation...")
+    if 'match_id' in df_original.columns:
+        df_original.sort_values(by=['match_date', 'match_id'], inplace=True)
+    else:
+        df_original.sort_values(by=['match_date', 'team_a', 'team_b'], inplace=True)
+
     df_original.drop(columns=['match_id', 'event_stage'], inplace=True, errors='ignore')
     global_stats, map_stats, h2h_stats = calculate_advanced_stats(df_original)
     model_df = create_feature_dataset(df_original, global_stats, map_stats, h2h_stats)
@@ -198,7 +191,6 @@ def main():
     final_model_df = pd.concat([model_df, model_df_flipped], ignore_index=True).sample(frac=1, random_state=42)
     print(f"Symmetrical training data created. Total rows: {len(final_model_df)}")
 
-    # --- Data Validation Check ---
     print("Validating final feature set for invalid numbers...")
     numeric_cols_to_check = final_model_df[numerical_features]
     if np.isinf(numeric_cols_to_check.values).any() or numeric_cols_to_check.isnull().values.any():
@@ -221,58 +213,72 @@ def main():
 
     cat_dims = [len(le.classes_) for le in label_encoders.values()]
     num_continuous = len(numerical_features)
-    X = X[numerical_features + categorical_features]
+    X = X[numerical_features + categorical_features]  # Ensure correct order
 
-    print(f"\nStep 4: Starting Optuna hyperparameter search for TabTransformer ({N_OPTUNA_TRIALS} trials)...")
+    best_params = {}
 
-    def objective(trial):
-        dim = trial.suggest_int("dim", 16, 64, step=8)
-        depth = trial.suggest_int("depth", 2, 6)
-        heads = trial.suggest_categorical("heads", [2, 4, 8])
-        attn_dropout = trial.suggest_float("attn_dropout", 0.1, 0.5)
-        ff_dropout = trial.suggest_float("ff_dropout", 0.1, 0.5)
-        lr = trial.suggest_float("lr", 1e-4, 1e-2, log=True)
+    # --- Mode 'search': Run a new hyperparameter search ---
+    if mode == 'search':
+        print(f"\nStep 4: Starting Optuna hyperparameter search ({N_OPTUNA_TRIALS} trials)...")
 
-        transformer_params = dict(
-            categories=tuple(cat_dims),
-            num_continuous=num_continuous,
-            dim=dim,
-            depth=depth,
-            heads=heads,
-            attn_dropout=attn_dropout,
-            ff_dropout=ff_dropout,
-            lr=lr,
-            device_name=device,
-            verbose=False,
-            # --- MODIFICATION: Use the new variables ---
-            patience=OPTUNA_PATIENCE,
-            max_epochs=OPTUNA_MAX_EPOCHS
-        )
+        def objective(trial):
+            dim = trial.suggest_int("dim", 16, 64, step=8)
+            depth = trial.suggest_int("depth", 2, 6)
+            heads = trial.suggest_categorical("heads", [2, 4, 8])
+            attn_dropout = trial.suggest_float("attn_dropout", 0.1, 0.5)
+            ff_dropout = trial.suggest_float("ff_dropout", 0.1, 0.5)
+            lr = trial.suggest_float("lr", 1e-4, 1e-2, log=True)
 
-        kf = KFold(n_splits=N_SPLITS_K_FOLD, shuffle=True, random_state=42)
-        cv_scores = []
-        for i, (train_idx, val_idx) in enumerate(kf.split(X.values, y.values)):
-            X_train, y_train = X.values[train_idx], y.values[train_idx]
-            X_val, y_val = X.values[val_idx], y.values[val_idx]
-            model = TabTransformerWrapper(**transformer_params)
-            model.fit(X_train, y_train, eval_set=[(X_val, y_val)])
-            preds = model.predict_proba(X_val)[:, 1]
-            score = roc_auc_score(y_val, preds)
-            cv_scores.append(score)
-            trial.report(score, i)
-            if trial.should_prune():
-                raise optuna.exceptions.TrialPruned()
-        return np.mean(cv_scores)
+            transformer_params = dict(
+                categories=tuple(cat_dims),
+                num_continuous=num_continuous,
+                dim=dim, depth=depth, heads=heads,
+                attn_dropout=attn_dropout, ff_dropout=ff_dropout,
+                lr=lr, device_name=device, verbose=False,
+                patience=OPTUNA_PATIENCE, max_epochs=OPTUNA_MAX_EPOCHS
+            )
 
-    study = optuna.create_study(direction="maximize", study_name="TabTransformer Optimization",
-                                pruner=optuna.pruners.MedianPruner())
-    study.optimize(objective, n_trials=N_OPTUNA_TRIALS)
+            kf = KFold(n_splits=N_SPLITS_K_FOLD, shuffle=True, random_state=42)
+            cv_scores = []
+            for i, (train_idx, val_idx) in enumerate(kf.split(X.values, y.values)):
+                X_train, y_train = X.values[train_idx], y.values[train_idx]
+                X_val, y_val = X.values[val_idx], y.values[val_idx]
+                model = TabTransformerWrapper(**transformer_params)
+                model.fit(X_train, y_train, eval_set=[(X_val, y_val)])
+                preds = model.predict_proba(X_val)[:, 1]
+                score = roc_auc_score(y_val, preds)
+                cv_scores.append(score)
+                trial.report(score, i)
+                if trial.should_prune():
+                    raise optuna.exceptions.TrialPruned()
+            return np.mean(cv_scores)
 
-    print(f"Search complete. Best AUC: {study.best_value:.4f}")
-    print("Best hyperparameters:", study.best_params)
+        study = optuna.create_study(direction="maximize", study_name="TabTransformer Optimization",
+                                    pruner=optuna.pruners.MedianPruner())
+        study.optimize(objective, n_trials=N_OPTUNA_TRIALS)
 
+        print(f"Search complete. Best AUC: {study.best_value:.4f}")
+        print("Best hyperparameters found:", study.best_params)
+
+        results_to_save = {
+            "best_auc_in_search": study.best_value,
+            "best_hyperparameters": study.best_params
+        }
+        with open(BEST_PARAMS_FILE, 'w') as f:
+            json.dump(results_to_save, f, indent=4)
+        print(f"\n✅ Best hyperparameters saved to {BEST_PARAMS_FILE}")
+        best_params = study.best_params
+
+    # --- Mode 'train': Load parameters from the JSON file ---
+    elif mode == 'train':
+        print(f"\nStep 4: Skipping search. Loading hyperparameters from {BEST_PARAMS_FILE}...")
+        with open(BEST_PARAMS_FILE, 'r') as f:
+            saved_results = json.load(f)
+        best_params = saved_results['best_hyperparameters']
+        print("Successfully loaded hyperparameters:", best_params)
+
+    # --- Final Training (happens in both modes) ---
     print("\nStep 5: Training final model with best hyperparameters on all data...")
-    best_params = study.best_params
     final_params = dict(
         categories=tuple(cat_dims),
         num_continuous=num_continuous,
@@ -284,7 +290,6 @@ def main():
         lr=best_params['lr'],
         device_name=device,
         verbose=True,
-        # --- NO CHANGE HERE: Final training should be thorough ---
         patience=20,
         max_epochs=150
     )
@@ -302,5 +307,30 @@ def main():
     print(f"Pipeline complete. Artifacts saved to {ARTIFACTS_FILE}")
 
 
+# --- MODIFICATION: This is the new interactive entry point ---
 if __name__ == '__main__':
-    main()
+    while True:
+        print("\n--- TabTransformer Training Menu ---")
+        print("Please choose a mode to run the script in:")
+        print(f"  1: Train using existing '{BEST_PARAMS_FILE}' file.")
+        print("  2: Run a new hyperparameter search and overwrite the old file.")
+
+        choice = input("Enter your choice (1 or 2): ")
+
+        if choice == '1':
+            if not os.path.exists(BEST_PARAMS_FILE):
+                print(f"\n❌ ERROR: Cannot find '{BEST_PARAMS_FILE}'.")
+                print("Please run option 2 first to create the file.\n")
+                continue
+
+            run_mode = 'train'
+            break
+
+        elif choice == '2':
+            run_mode = 'search'
+            break
+
+        else:
+            print("\n❌ Invalid input. Please enter only '1' or '2'.\n")
+
+    main(run_mode)

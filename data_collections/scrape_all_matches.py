@@ -120,8 +120,8 @@ if __name__ == "__main__":
 
     # 2) See which matches we've already scraped
     scraped = set()
-    if os.path.exists("data.csv"):
-        existing = pd.read_csv("data.csv", usecols=["match_id"])
+    if os.path.exists("../models/catboost/data.csv"):
+        existing = pd.read_csv("../models/catboost/data.csv", usecols=["match_id"])
         scraped = set(existing["match_id"].astype(str))
 
     all_rows = []
@@ -152,7 +152,7 @@ if __name__ == "__main__":
         df.to_csv("data.csv",
                   mode='a',
                   index=False,
-                  header=not os.path.exists("data.csv"))
+                  header=not os.path.exists("../models/catboost/data.csv"))
         print(f"\n✅ Appended {len(df)} new player rows to data.csv")
     else:
         print("\nℹ️  No new matches found or all new matches were skipped.")

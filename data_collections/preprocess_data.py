@@ -6,7 +6,7 @@ def main():
     # 1. Load raw scraped data
     print("Loading raw scraped data from data.csv...")
     try:
-        df = pd.read_csv('data.csv')
+        df = pd.read_csv('../models/catboost/data.csv')
     except MemoryError:
         print("\n--- FATAL ERROR ---")
         print("Failed to load data.csv into memory.")
@@ -102,7 +102,7 @@ def main():
     ready.dropna(subset=diff_cols, inplace=True)
 
     # 8. Write out a new CSV that your trainer will consume
-    output_path = 'ready.csv'
+    output_path = '../models/catboost/ready.csv'
     ready.to_csv(output_path, index=False)
     print(f"\n✅ Preprocessed data written to {output_path}. Final shape: {ready.shape}")
 
