@@ -5,7 +5,7 @@ from importlib import import_module
 from typing import Optional, Tuple, Dict
 import logging
 
-MODEL_VERSION = "1.1"
+MODEL_VERSION = "2.0"
 
 
 def load_valid_teams(filepath: str) -> set:
